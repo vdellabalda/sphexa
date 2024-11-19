@@ -1,8 +1,8 @@
 /*
  * MIT License
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
+ *               2024 University of Basel
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,48 +24,42 @@
  */
 
 /*! @file
- * @brief Evaluate choice of propagator
+ * @brief Translation unit for the ve hydro propagator initializer
  *
  * @author Sebastian Keller <sebastian.f.keller@gmail.com>
- * @author Jose A. Escartin <ja.escartin@gmail.com>
  * @author ChristopherBignamini <christopher.bignamini@gmail.com>
  */
 
-#pragma once
-
-#include "ipropagator.hpp"
+#include "sph/types.hpp"
 #include "propagator.h"
+#include "turb_ve.hpp"
+#include "ve_hydro.hpp"
 
 namespace sphexa
 {
 
 template<class DomainType, class ParticleDataType>
 std::unique_ptr<Propagator<DomainType, ParticleDataType>>
-propagatorFactory(const std::string& choice, bool avClean, std::ostream& output, size_t rank, const InitSettings& s)
+PropLib<DomainType, ParticleDataType>::makeHydroVeProp(std::ostream& output, size_t rank, bool avClean)
 {
-    if (choice == "ve") { return PropLib<DomainType, ParticleDataType>::makeHydroVeProp(output, rank, avClean); }
-    if (choice == "ve-bdt")
-    {
-        return PropLib<DomainType, ParticleDataType>::makeHydroVeBdtProp(output, rank, s, avClean);
-    }
-    if (choice == "std") { return PropLib<DomainType, ParticleDataType>::makeHydroProp(output, rank); }
-#ifdef SPH_EXA_HAVE_GRACKLE
-    if (choice == "std-cooling")
-    {
-        return PropLib<DomainType, ParticleDataType>::makeHydroGrackleProp(output, rank, s);
-    }
-#endif
-    if (choice == "nbody") { return PropLib<DomainType, ParticleDataType>::makeNbodyProp(output, rank); }
-    if (choice == "turbulence")
-    {
-        return PropLib<DomainType, ParticleDataType>::makeTurbVeBdtProp(output, rank, s, avClean);
-    }
-    if (choice == "turbulence-ve")
-    {
-        return PropLib<DomainType, ParticleDataType>::makeTurbVeProp(output, rank, s, avClean);
-    }
-
-    throw std::runtime_error("Unknown propagator choice: " + choice);
+    if (avClean) { return std::make_unique<HydroVeProp<true, DomainType, ParticleDataType>>(output, rank); }
+    else { return std::make_unique<HydroVeProp<false, DomainType, ParticleDataType>>(output, rank); }
 }
 
+template<class DomainType, class ParticleDataType>
+std::unique_ptr<Propagator<DomainType, ParticleDataType>>
+PropLib<DomainType, ParticleDataType>::makeTurbVeProp(std::ostream& output, size_t rank, const InitSettings& settings,
+                                                      bool avClean)
+{
+    if (avClean) { return std::make_unique<TurbVeProp<true, DomainType, ParticleDataType>>(output, rank, settings); }
+    else { return std::make_unique<TurbVeProp<false, DomainType, ParticleDataType>>(output, rank, settings); }
+}
+
+#ifdef USE_CUDA
+template struct PropLib<cstone::Domain<SphTypes::KeyType, SphTypes::CoordinateType, cstone::GpuTag>,
+                        SimulationData<cstone::GpuTag>>;
+#else
+template struct PropLib<cstone::Domain<SphTypes::KeyType, SphTypes::CoordinateType, cstone::CpuTag>,
+                        SimulationData<cstone::CpuTag>>;
+#endif
 } // namespace sphexa
