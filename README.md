@@ -6,6 +6,8 @@
   <img src="https://raw.githubusercontent.com/unibas-dmi-hpc/SPH-EXA/develop/docs/artwork/SPH-EXA_logo.png" alt="SPH-EXA logo" width="200"/>
 </p>
 
+My own branch of SPH-EXA to implement and test an on-the-fly structure finder.
+
 # SPH
 
 The smoothed particle hydrodynamics (SPH) technique is a purely Lagrangian method.
