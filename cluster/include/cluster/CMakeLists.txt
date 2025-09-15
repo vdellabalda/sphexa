@@ -1,0 +1,3 @@
+if (CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
+    set_target_properties(clusterer PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+endif ()
