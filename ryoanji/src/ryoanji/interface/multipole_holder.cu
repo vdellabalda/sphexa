@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Ryoanji N-body solver
  *
- * Copyright (c) 2024 CSCS, ETH Zurich, University of Basel, University of Zurich
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -66,9 +50,8 @@ public:
         return groups_.view();
     }
 
-    void upsweep(const Tc* x, const Tc* y, const Tc* z, const Tm* m, const cstone::Octree<KeyType>& globalOctree,
-                 const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const cstone::LocalIndex* layout,
-                 MType* multipoles)
+    void upsweep(const Tc* x, const Tc* y, const Tc* z, const Tm* m, cstone::OctreeView<const KeyType> gOctree,
+                 const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const cstone::LocalIndex* layout)
     {
         octree_ = focusTree.octreeViewAcc();
         resize(octree_.numLeafNodes);
@@ -81,46 +64,31 @@ public:
         computeLeafMultipoles(x, y, z, m, octree_.leafToInternal + octree_.numInternalNodes, octree_.numLeafNodes,
                               layout_, centers_, rawPtr(multipoles_));
 
-        std::vector<TreeNodeIndex> levelRange(cstone::maxTreeLevel<KeyType>{} + 2);
-        memcpyD2H(octree_.levelRange, levelRange.size(), levelRange.data());
+        auto upsweepGpu = [](auto levelRange, auto childOffsets, auto M, auto centers)
+        {
+            int numLevels = levelRange.size() - 2;
+            for (int level = numLevels - 1; level >= 0; level--)
+            {
+                int numCellsLevel = levelRange[level + 1] - levelRange[level];
+                if (numCellsLevel)
+                {
+                    upsweepMultipoles(levelRange[level], levelRange[level + 1], childOffsets, centers, M);
+                }
+            }
+        };
 
         //! first upsweep with local data, start at lowest possible level - 1, lowest level can only be leaves
-        int numLevels = cstone::maxTreeLevel<KeyType>{};
-        for (int level = numLevels - 1; level >= 0; level--)
-        {
-            int numCellsLevel = levelRange[level + 1] - levelRange[level];
-            if (numCellsLevel)
-            {
-                upsweepMultipoles(levelRange[level], levelRange[level + 1], octree_.childOffsets, centers_,
-                                  rawPtr(multipoles_));
-            }
-        }
+        upsweepGpu(octree_.levelRangeSpan(), octree_.childOffsets, multipoles_.data(), centers_);
 
-        memcpyD2H(rawPtr(multipoles_), multipoles_.size(), multipoles);
+        std::span d_multipoleSpan{rawPtr(multipoles_), size_t(octree_.numNodes)};
+        focusTree.globalExchange(gOctree, d_multipoleSpan, std::span<MType>{}, traversalStack_, upsweepGpu,
+                                 globalCenters.data());
 
-        auto ryUpsweep = [](auto levelRange, auto childOffsets, auto M, auto centers)
-        { upsweepMultipoles(levelRange, childOffsets.data(), centers, M); };
-
-        gsl::span multipoleSpan{multipoles, size_t(octree_.numNodes)};
-        cstone::globalFocusExchange(globalOctree, focusTree, multipoleSpan, ryUpsweep, globalCenters.data());
-
-        // H2D multipoles
-        memcpyH2D(multipoles, multipoles_.size(), rawPtr(multipoles_));
-
-        gsl::span d_multipoleSpan{rawPtr(multipoles_), size_t(octree_.numNodes)};
-        focusTree.peerExchangeGpu(d_multipoleSpan, static_cast<int>(cstone::P2pTags::focusPeerCenters) + 1,
-                                  traversalStack_);
+        focusTree.peerExchange(d_multipoleSpan, static_cast<int>(cstone::P2pTags::focusPeerCenters) + 1,
+                               traversalStack_);
 
         //! second upsweep with leaf data from peer and global ranks in place
-        for (int level = numLevels - 1; level >= 0; level--)
-        {
-            int numCellsLevel = levelRange[level + 1] - levelRange[level];
-            if (numCellsLevel)
-            {
-                upsweepMultipoles(levelRange[level], levelRange[level + 1], octree_.childOffsets, centers_,
-                                  rawPtr(multipoles_));
-            }
-        }
+        upsweepGpu(octree_.levelRangeSpan(), octree_.childOffsets, multipoles_.data(), centers_);
     }
 
     float compute(GroupView grp, const Tc* x, const Tc* y, const Tc* z, const Tm* m, const Th* h, Tc G, int numShells,
@@ -189,10 +157,10 @@ GroupView MultipoleHolder<Tc, Th, Tm, Ta, Tf, KeyType, MType>::computeSpatialGro
 
 template<class Tc, class Th, class Tm, class Ta, class Tf, class KeyType, class MType>
 void MultipoleHolder<Tc, Th, Tm, Ta, Tf, KeyType, MType>::upsweep(
-    const Tc* x, const Tc* y, const Tc* z, const Tm* m, const cstone::Octree<KeyType>& globalTree,
-    const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const LocalIndex* layout, MType* multipoles)
+    const Tc* x, const Tc* y, const Tc* z, const Tm* m, cstone::OctreeView<const KeyType> gOctree,
+    const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const LocalIndex* layout)
 {
-    impl_->upsweep(x, y, z, m, globalTree, focusTree, layout, multipoles);
+    impl_->upsweep(x, y, z, m, gOctree, focusTree, layout);
 }
 
 template<class Tc, class Th, class Tm, class Ta, class Tf, class KeyType, class MType>

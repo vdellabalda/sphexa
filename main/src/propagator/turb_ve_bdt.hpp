@@ -32,11 +32,7 @@
 #pragma once
 
 #include <filesystem>
-#include <sstream>
-#include <variant>
 
-#include "cstone/util/constexpr_string.hpp"
-#include "cstone/fields/field_get.hpp"
 #include "io/arg_parser.hpp"
 #include "sph/sph.hpp"
 #include "sph/hydro_turb/turbulence_data.hpp"
@@ -56,7 +52,7 @@ class TurbVeBdtProp final : public HydroVeBdtProp<avClean, DomainType, DataType>
     using Base = HydroVeBdtProp<avClean, DomainType, DataType>;
     using Base::rank_;
     using Base::timer;
-    sph::TurbulenceData<typename DataType::RealType, typename DataType::AcceleratorType> turbulenceData;
+    TurbulenceData<typename DataType::RealType, typename DataType::AcceleratorType> turbulenceData;
 
 public:
     TurbVeBdtProp(std::ostream& output, size_t rank, const InitSettings& settings)

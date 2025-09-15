@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Cornerstone octree
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -70,11 +54,13 @@ static void generalExchangeRandomGaussian(int thisRank, int numRanks)
     // common pool of coordinates, identical on all ranks
     RandomGaussianCoordinates<T, SfcKind<KeyType>> coords(numRanks * numParticles, box);
 
-    auto [tree, counts] = computeOctree(coords.particleKeys().data(),
-                                        coords.particleKeys().data() + coords.particleKeys().size(), bucketSize);
+    auto [tree, counts] = computeOctree<KeyType>(coords.particleKeys(), bucketSize);
 
-    Octree<KeyType> domainTree;
-    domainTree.update(tree.data(), nNodes(tree));
+    OctreeData<KeyType, CpuTag> domainTree_;
+    domainTree_.resize(nNodes(tree));
+    updateInternalTree<KeyType>(tree, domainTree_.data());
+    auto domainTree   = domainTree_.cdata();
+    domainTree.leaves = tree.data();
 
     auto assignment = makeSfcAssignment(numRanks, counts, tree.data());
 
@@ -119,18 +105,16 @@ static void generalExchangeRandomGaussian(int thisRank, int numRanks)
         }
     }
 
-    upsweep({octree.levelRange, maxTreeLevel<KeyType>{} + 2}, {octree.childOffsets, size_t(octree.numNodes)},
-            testCounts.data(), NodeCount<unsigned>{});
+    upsweep(octree.levelRangeSpan(), octree.childOffsets, testCounts.data(), NodeCount<unsigned>{});
 
     std::vector<int> scratch;
     focusTree.template peerExchange<unsigned>(testCounts, static_cast<int>(P2pTags::focusPeerCounts) + 2, scratch);
 
     auto upsweepFunction = [](auto levelRange, auto childOffsets, auto M)
     { upsweep(levelRange, childOffsets, M, NodeCount<unsigned>{}); };
-    globalFocusExchange<unsigned>(domainTree, focusTree, testCounts, upsweepFunction);
+    focusTree.globalExchange(domainTree, std::span(testCounts), std::span<unsigned>{}, scratch, upsweepFunction);
 
-    upsweep({octree.levelRange, maxTreeLevel<KeyType>{} + 2}, {octree.childOffsets, size_t(octree.numNodes)},
-            testCounts.data(), NodeCount<unsigned>{});
+    upsweep(octree.levelRangeSpan(), octree.childOffsets, testCounts.data(), NodeCount<unsigned>{});
 
     {
         for (size_t i = 0; i < testCounts.size(); ++i)
@@ -178,11 +162,13 @@ static void generalExchangeSourceCenter(int thisRank, int numRanks)
     RandomGaussianCoordinates<T, SfcKind<KeyType>> coords(numRanks * numParticles, box);
     std::vector<T> globalMasses(numRanks * numParticles, 1.0 / (numRanks * numParticles));
 
-    auto [tree, counts] = computeOctree(coords.particleKeys().data(),
-                                        coords.particleKeys().data() + coords.particleKeys().size(), bucketSize);
+    auto [tree, counts] = computeOctree(std::span(coords.particleKeys()), bucketSize);
 
-    Octree<KeyType> domainTree;
-    domainTree.update(tree.data(), nNodes(tree));
+    OctreeData<KeyType, CpuTag> domainTree_;
+    domainTree_.resize(nNodes(tree));
+    updateInternalTree<KeyType>(tree, domainTree_.data());
+    auto domainTree   = domainTree_.cdata();
+    domainTree.leaves = tree.data();
 
     auto assignment = makeSfcAssignment(numRanks, counts, tree.data());
 
@@ -213,7 +199,7 @@ static void generalExchangeSourceCenter(int thisRank, int numRanks)
 
     auto octree = focusTree.octreeViewAcc();
 
-    focusTree.updateCenters(x.data(), y.data(), z.data(), m.data(), domainTree, box);
+    focusTree.updateCenters(x.data(), y.data(), z.data(), m.data(), domainTree);
     auto sourceCenter = focusTree.expansionCentersAcc();
 
     constexpr T tol = std::is_same_v<T, double> ? 1e-10 : 1e-4;

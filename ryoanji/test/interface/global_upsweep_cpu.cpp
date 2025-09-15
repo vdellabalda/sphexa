@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Ryoanji N-body solver
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -81,11 +65,14 @@ static int multipoleExchangeTest(int thisRank, int numRanks)
     const cstone::FocusedOctree<KeyType, T>& focusTree = domain.focusTree();
     //! the focused octree, structure only
     auto                                         octree  = focusTree.octreeViewAcc();
-    gsl::span<const cstone::SourceCenterType<T>> centers = focusTree.expansionCentersAcc();
+    std::span<const cstone::SourceCenterType<T>> centers = focusTree.expansionCentersAcc();
+
+    cstone::SourceCenterType<T> refCenter = cstone::massCenter<T>(
+        coords.x().data(), coords.y().data(), coords.z().data(), globalMasses.data(), 0, globalMasses.size());
 
     std::vector<MultipoleType> multipoles(octree.numNodes);
-    ryoanji::computeGlobalMultipoles(x.data(), y.data(), z.data(), m.data(), x.size(), domain.globalTree(), focusTree,
-                                     domain.layout().data(), multipoles.data());
+    ryoanji::computeMultipoles(x.data(), y.data(), z.data(), m.data(), domain.globalTree(), focusTree,
+                               domain.layout().data(), multipoles.data());
 
     MultipoleType globalRootMultipole = multipoles[octree.levelRange[0]];
 
@@ -94,19 +81,23 @@ static int multipoleExchangeTest(int thisRank, int numRanks)
     P2M(coords.x().data(), coords.y().data(), coords.z().data(), globalMasses.data(), 0, numParticles * numRanks,
         centers[octree.levelRange[0]], reference);
 
-    double maxDiff = max(abs(reference - globalRootMultipole));
+    double maxDiffCe = max(abs(makeVec3(refCenter - centers[0])));
+    bool   passCe    = maxDiffCe < 1e-10;
+    double maxDiffMp = max(abs(reference - globalRootMultipole));
+    bool   passMp    = maxDiffMp < 1e-10;
 
-    bool pass      = maxDiff < 1e-10;
-    int  numPassed = pass;
-    mpiAllreduce(MPI_IN_PLACE, &numPassed, 1, MPI_SUM);
+    int numPassed[2] = {passCe, passMp};
+    mpiAllreduce(MPI_IN_PLACE, numPassed, 2, MPI_SUM, MPI_COMM_WORLD);
 
     if (thisRank == 0)
     {
-        std::string testResult = (numPassed == numRanks) ? "PASS" : "FAIL";
-        std::cout << "Test result: " << testResult << std::endl;
+        std::string testResultCe = (numPassed[0] == numRanks) ? "PASS" : "FAIL";
+        std::string testResultMp = (numPassed[1] == numRanks) ? "PASS" : "FAIL";
+        std::cout << "COM       test result: " << testResultCe << std::endl;
+        std::cout << "Multipole test result: " << testResultMp << std::endl;
     }
 
-    if (numPassed == numRanks) { return EXIT_SUCCESS; }
+    if (numPassed[0] == numRanks && numPassed[1] == numRanks) { return EXIT_SUCCESS; }
     else { return EXIT_FAILURE; }
 }
 

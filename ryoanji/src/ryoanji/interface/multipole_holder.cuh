@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Ryoanji N-body solver
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -56,14 +40,12 @@ public:
     /*! @brief compute multipole moments with an upsweep from leaves to the tree root
      *
      * @param[in]  x, y, z, m    source particles in SFC order as referenced by layout, on GPU
-     * @param[in]  globalOctree  global octree replicated across nodes on GPU
+     * @param[in]  gOctree       global octree replicated across nodes on GPU (fully traversible, internal in leaf part)
      * @param[in]  focusTree     locally essential octree focused on local domain
      * @param[in]  layout        for each leaf cell, stores the index of the first source body in cell, on GPU
-     * @param[out] multipoles    output array multipoles, length=focusTree.numNodes, on host
      */
-    void upsweep(const Tc* x, const Tc* y, const Tc* z, const Tm* m, const cstone::Octree<KeyType>& globalOctree,
-                 const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const cstone::LocalIndex* layout,
-                 MType* multipoles);
+    void upsweep(const Tc* x, const Tc* y, const Tc* z, const Tm* m, cstone::OctreeView<const KeyType> gOctree,
+                 const cstone::FocusedOctree<KeyType, Tf, cstone::GpuTag>& focusTree, const cstone::LocalIndex* layout);
 
     /*! @brief compute accelerations on target particles, assuming sources = targets
      *

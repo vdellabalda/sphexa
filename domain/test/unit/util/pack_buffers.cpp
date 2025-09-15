@@ -1,7 +1,7 @@
 /*
  * Cornerstone octree
  *
- * Copyright (c) 2024 CSCS, ETH Zurich, University of Zurich, 2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
  * Please, refer to the LICENSE file in the root directory.
  * SPDX-License-Identifier: MIT License
@@ -132,4 +132,32 @@ TEST(PackBuffers, packAllocBuffer)
     EXPECT_EQ(base, offsets[0].data());
     EXPECT_EQ(base + 4, offsets[1].data());
     EXPECT_EQ(base + 10, offsets[2].data());
+}
+
+TEST(PackBuffers, packAllocBufferPoly)
+{
+    std::vector<char> backing;
+
+    int alignment = 8;
+    std::array<std::size_t, 3> numElements{3, 7, 2};
+
+    auto packed = packAllocBuffer(backing, TypeList<int, uint8_t, double>{}, numElements, alignment);
+
+    std::size_t expectedSize = cstone::round_up(numElements[0] * sizeof(int), alignment) +
+                               cstone::round_up(numElements[1] * sizeof(uint8_t), alignment) +
+                               cstone::round_up(numElements[2] * sizeof(double), alignment);
+
+    EXPECT_EQ(backing.size(), expectedSize);
+
+    auto p0 = std::get<0>(packed);
+    EXPECT_EQ(p0.size(), numElements[0]);
+    EXPECT_EQ(reinterpret_cast<char*>(p0.data()) - backing.data(), 0);
+
+    auto p1 = std::get<1>(packed);
+    EXPECT_EQ(p1.size(), numElements[1]);
+    EXPECT_EQ(reinterpret_cast<char*>(p1.data()) - backing.data(), 16);
+
+    auto p2 = std::get<2>(packed);
+    EXPECT_EQ(p2.size(), numElements[2]);
+    EXPECT_EQ(reinterpret_cast<char*>(p2.data()) - backing.data(), 16 + 8);
 }

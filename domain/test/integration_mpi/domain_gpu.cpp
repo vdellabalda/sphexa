@@ -1,25 +1,10 @@
 /*
- * MIT License
+ * Cornerstone octree
  *
- * Copyright (c) 2022 CSCS, ETH Zurich
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -118,7 +103,7 @@ void randomGaussianAssignment(int rank, int numRanks)
     ASSERT_EQ(domainCpu.startIndex(), domainGpu.startIndex());
     ASSERT_EQ(domainCpu.endIndex(), domainGpu.endIndex());
     EXPECT_EQ(domainCpu.nParticlesWithHalos(), domainGpu.nParticlesWithHalos());
-    EXPECT_EQ(domainCpu.globalTree().treeLeaves().size(), domainGpu.globalTree().treeLeaves().size());
+    EXPECT_EQ(domainCpu.globalTree().numNodes, domainGpu.globalTree().numNodes);
     EXPECT_EQ(d_x.size(), x.size());
 
     {
@@ -152,7 +137,7 @@ TEST(FocusDomain, removeParticle)
     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
 
     using Real    = double;
-    using KeyType = unsigned;
+    using KeyType = uint64_t;
 
     Box<Real> box(0, 1);
     LocalIndex numParticlesPerRank = 1000;
@@ -216,7 +201,7 @@ TEST(DomainGpu, reapplySync)
     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
 
     using Real    = double;
-    using KeyType = unsigned;
+    using KeyType = uint64_t;
 
     Box<Real> box(0, 1);
     LocalIndex numParticlesPerRank = 10000;
@@ -286,4 +271,30 @@ TEST(DomainGpu, reapplySync)
         int numCommon = it - s.begin();
         EXPECT_EQ(numCommon, domain.nParticles());
     }
+}
+
+TEST(DomainGpu, Allgatherv)
+{
+    int rank = 0, numRanks = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
+
+    using T = int;
+
+    std::vector<T> h_dst(numRanks, 0);
+    h_dst[rank]         = 100 + rank;
+    DeviceVector<T> dst = h_dst;
+
+    std::vector<int> counts(numRanks, 1);
+    std::vector<int> displ(numRanks);
+    std::iota(displ.begin(), displ.end(), 0);
+
+    mpiAllgathervGpuDirect<true>(MPI_IN_PLACE, 0, dst.data(), counts.data(), displ.data(), MPI_COMM_WORLD);
+
+    std::vector dstDl = toHost(dst);
+    std::vector<T> ref(numRanks);
+
+    std::iota(ref.begin(), ref.end(), 100);
+
+    EXPECT_EQ(dstDl, ref);
 }

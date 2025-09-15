@@ -27,14 +27,12 @@
  * @brief A Propagator class for modern SPH with generalized volume elements
  *
  * @author Sebastian Keller <sebastian.f.keller@gmail.com>
- * @author Jose A. Escartin <ja.escartin@gmail.com>
  */
 
 #pragma once
 
-#include <variant>
+#include <filesystem>
 
-#include "cstone/cuda/device_vector.h"
 #include "cstone/fields/field_get.hpp"
 #include "io/arg_parser.hpp"
 #include "sph/particles_data.hpp"
@@ -64,10 +62,11 @@ protected:
     using MultipoleType = ryoanji::CartesianQuadrupole<Tmass>;
 
     using Acc       = typename DataType::AcceleratorType;
-    using MHolder_t = typename cstone::AccelSwitchType<Acc, MultipoleHolderCpu, MultipoleHolderGpu>::template type<
-        MultipoleType, DomainType, typename DataType::HydroData>;
+    using MHolder_t = std::conditional_t<cstone::HaveGpu<Acc>{},
+                                         MultipoleHolderGpu<MultipoleType, DomainType, typename DataType::HydroData>,
+                                         MultipoleHolderCpu<MultipoleType, DomainType, typename DataType::HydroData>>;
     template<class VType>
-    using AccVector = typename cstone::AccelSwitchType<Acc, std::vector, cstone::DeviceVector>::template type<VType>;
+    using AccVector = std::conditional_t<cstone::HaveGpu<Acc>{}, cstone::DeviceVector<VType>, std::vector<VType>>;
 
     MHolder_t mHolder_;
 
@@ -229,6 +228,9 @@ public:
         pmReader.start();
         sync(domain, simData);
         timer.step("domain::sync");
+        timer.logStatistics("numParticles", domain.nParticles());
+        timer.logStatistics("numHalos", domain.nParticlesWithHalos() - domain.nParticles());
+        timer.logStatistics("assignment", domain.assignmentStart());
 
         auto&  d     = simData.hydro;
         size_t first = domain.startIndex();
@@ -268,7 +270,7 @@ public:
 
         if (avClean)
         {
-            domain.exchangeHalos(get<"dV11", "dV12", "dV22", "dV23", "dV33", "alpha">(d), get<"keys">(d),
+            domain.exchangeHalos(get<"dV11", "dV12", "dV13", "dV22", "dV23", "dV33", "alpha">(d), get<"keys">(d),
                                  haloRecvScratch);
         }
         else { domain.exchangeHalos(std::tie(get<"alpha">(d)), get<"keys">(d), haloRecvScratch); }
@@ -289,6 +291,10 @@ public:
             mHolder_.traverse(gravGroup, d, domain);
             timer.step("Gravity");
             pmReader.step();
+
+            auto stats = mHolder_.readStats();
+            timer.logStatistics("sumP2P", stats[0] / timer.getLastStepTime());
+            timer.logStatistics("sumM2P", stats[2] / timer.getLastStepTime());
         }
         groupAccTimestep(activeRungs_, rawPtr(groupDt_), d);
     }
@@ -401,8 +407,7 @@ public:
                                  d.outputFieldIndices.begin();
                     transferToHost(d, first, last, {d.fieldNames[fidx]});
                     std::visit([writer, c = column, key = namesDone[i]](auto field)
-                               { writer->writeField(key, field->data(), c); },
-                               fieldPointers[fidx]);
+                               { writeField(writer, key, field->data(), c); }, fieldPointers[fidx]);
                     indicesDone.erase(indicesDone.begin() + i);
                     namesDone.erase(namesDone.begin() + i);
                 }

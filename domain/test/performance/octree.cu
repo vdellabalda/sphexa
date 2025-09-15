@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Cornerstone octree
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -36,12 +20,12 @@
 #include <thrust/reduce.h>
 
 #include "cstone/cuda/thrust_util.cuh"
+#include "cstone/focus/source_center_gpu.h"
 #include "cstone/traversal/collisions_gpu.h"
 #include "cstone/tree/update_gpu.cuh"
 #include "cstone/tree/octree_gpu.h"
 
 #include "coord_samples/random.hpp"
-
 #include "timing.cuh"
 
 using namespace cstone;
@@ -54,10 +38,10 @@ auto benchmarkMacsCpu(const OctreeView<KeyType>& octree,
                       TreeNodeIndex firstFocusNode,
                       TreeNodeIndex lastFocusNode)
 {
-    std::vector<char> macs(octree.numNodes, 0);
+    std::vector<uint8_t> macs(octree.numNodes, 0);
     auto findMacsLambda = [&octree, &centers, &box, &leaves, &macs, firstFocusNode, lastFocusNode]()
     {
-        markMacs(octree.prefixes, octree.childOffsets, centers, box, leaves.data() + firstFocusNode,
+        markMacs(octree.prefixes, octree.childOffsets, octree.parents, centers, box, leaves.data() + firstFocusNode,
                  lastFocusNode - firstFocusNode, false, macs.data());
     };
 
@@ -67,13 +51,13 @@ auto benchmarkMacsCpu(const OctreeView<KeyType>& octree,
     return macs;
 }
 
-int main()
+int main(int argc, char** argv)
 {
     using KeyType = uint64_t;
     using T       = double;
     Box<T> box{-1, 1};
 
-    unsigned numParticles = 2000000;
+    unsigned numParticles = argc > 1 ? std::stoi(argv[1]) : 2000000;
     unsigned bucketSize   = 16;
 
     RandomGaussianCoordinates<T, MortonKey<KeyType>> randomBox(numParticles, box);
@@ -90,8 +74,8 @@ int main()
 
     auto fullBuild = [&]()
     {
-        while (!updateOctreeGpu(rawPtr(particleCodes), rawPtr(particleCodes) + numParticles, bucketSize, tree, counts,
-                                tmpTree, workArray))
+        while (!updateOctreeGpu<KeyType>({rawPtr(particleCodes), numParticles}, bucketSize, tree, counts, tmpTree,
+                                         workArray))
             ;
     };
 
@@ -100,10 +84,7 @@ int main()
               << " count: " << thrust::reduce(counts.begin(), counts.end(), 0) << std::endl;
 
     auto updateTree = [&]()
-    {
-        updateOctreeGpu(rawPtr(particleCodes), rawPtr(particleCodes) + numParticles, bucketSize, tree, counts, tmpTree,
-                        workArray);
-    };
+    { updateOctreeGpu<KeyType>({rawPtr(particleCodes), numParticles}, bucketSize, tree, counts, tmpTree, workArray); };
 
     float updateTime = timeGpu(updateTree);
     std::cout << "build time with guess " << updateTime / 1000 << " nNodes(tree): " << nNodes(tree)
@@ -115,24 +96,38 @@ int main()
     octree.resize(nNodes(tree));
     auto buildInternal = [&]() { buildOctreeGpu(rawPtr(tree), octree.data()); };
 
-    float internalBuildTime           = timeGpu(buildInternal);
-    std::vector<TreeNodeIndex> ranges = toHost(octree.levelRange);
+    float internalBuildTime = timeGpu(buildInternal);
     std::cout << "internal build time " << internalBuildTime / 1000 << std::endl;
     std::cout << "level ranges: ";
     for (int i = 0; i <= maxTreeLevel<KeyType>{}; ++i)
-        std::cout << ranges[i] << " ";
+        std::cout << octree.levelRange[i] << " ";
     std::cout << std::endl;
 
     // halo discovery benchmark
 
-    thrust::device_vector<float> haloRadii(nNodes(tree), 0.01);
-    thrust::device_vector<int> flags(nNodes(tree), 0);
+    thrust::device_vector<float> haloRadii(octree.numLeafNodes, 0.01);
+    thrust::device_vector<uint8_t> flags(octree.numNodes, 0);
+    thrust::device_vector<Vec3<T>> nodeCenters(octree.numNodes), nodeSizes(octree.numNodes);
+    computeGeoCentersGpu(octree.prefixes.data(), octree.numNodes, rawPtr(nodeCenters), rawPtr(nodeSizes), box);
+    thrust::host_vector<Vec3<T>> h_nc = nodeCenters, h_ns = nodeSizes;
 
-    auto octreeView      = octree.data();
-    auto findHalosLambda = [octree = octreeView, &box, &tree, &haloRadii, &flags]()
+    thrust::device_vector<Vec3<T>> searchCenters(octree.numLeafNodes), searchSizes(octree.numLeafNodes);
+    gatherGpu(leafToInternal(octree).data(), octree.numLeafNodes, rawPtr(nodeCenters), rawPtr(searchCenters));
+    gatherGpu(leafToInternal(octree).data(), octree.numLeafNodes, rawPtr(nodeSizes), rawPtr(searchSizes));
+
+    thrust::host_vector<Vec3<T>> h_searchCenters = searchCenters, h_searchSizes = searchSizes;
+    thrust::host_vector<float> h_radii = haloRadii;
+    for (int i = 0; i < octree.numLeafNodes; ++i)
     {
-        findHalosGpu(octree.prefixes, octree.childOffsets, octree.internalToLeaf, rawPtr(tree), rawPtr(haloRadii), box,
-                     0, octree.numLeafNodes / 4, rawPtr(flags));
+        h_searchSizes[i] += Vec3<T>{h_radii[i], h_radii[i], h_radii[i]};
+    }
+    searchSizes = h_searchSizes;
+
+    auto od              = octree.data();
+    auto findHalosLambda = [&]()
+    {
+        findHalosGpu(od.prefixes, od.childOffsets, od.parents, rawPtr(nodeCenters), rawPtr(nodeSizes), rawPtr(tree),
+                     rawPtr(searchCenters), rawPtr(searchSizes), box, 0, od.numLeafNodes / 4, rawPtr(flags));
     };
 
     float findTime = timeGpu(findHalosLambda);
@@ -140,17 +135,18 @@ int main()
               << " count: " << thrust::reduce(flags.begin(), flags.end(), 0) << std::endl;
 
     thrust::host_vector<KeyType> h_tree = tree;
-    Octree<KeyType> h_octreeHarness;
-    h_octreeHarness.update(h_tree.data(), nNodes(h_tree));
+    OctreeData<KeyType, CpuTag> h_octreeHarness;
+    h_octreeHarness.resize(nNodes(h_tree));
+    updateInternalTree<KeyType>({h_tree.data(), h_tree.size()}, h_octreeHarness.data());
     OctreeView<KeyType> h_octree = h_octreeHarness.data();
     {
-        thrust::host_vector<float> radii = haloRadii;
-        std::vector<int> h_flags(nNodes(tree), 0);
+        std::vector<uint8_t> h_flags(octree.numNodes, 0);
 
         auto findHalosCpuLambda = [&]()
         {
-            findHalos(h_octree.prefixes, h_octree.childOffsets, h_octree.internalToLeaf, h_tree.data(), radii.data(),
-                      box, 0, nNodes(tree) / 4, h_flags.data());
+            findHalos(h_octree.prefixes, h_octree.childOffsets, h_octree.parents, h_nc.data(), h_ns.data(),
+                      h_tree.data(), h_searchCenters.data(), h_searchSizes.data(), box, 0, od.numLeafNodes / 4,
+                      h_flags.data());
         };
         float findTimeCpu = timeCpu(findHalosCpuLambda);
         std::cout << "CPU halo discovery " << findTimeCpu << " nNodes(tree): " << nNodes(h_tree)
@@ -164,7 +160,7 @@ int main()
     TreeNodeIndex firstFocusNode = 10000 + 0;
     TreeNodeIndex lastFocusNode  = 10000 + octree.numLeafNodes / 2;
 
-    thrust::device_vector<char> macs(octree.numNodes);
+    thrust::device_vector<uint8_t> macs(octree.numNodes);
     thrust::device_vector<SourceCenterType<T>> centers(octree.numNodes);
 
     float invTheta = 1.0 / 0.5;
@@ -186,9 +182,9 @@ int main()
     }
     centers = h_centers;
 
-    auto findMacsLambda = [octree = octreeView, &centers, &box, &tree, &macs, firstFocusNode, lastFocusNode]()
+    auto findMacsLambda = [od, &centers, &box, &tree, &macs, firstFocusNode, lastFocusNode]()
     {
-        markMacsGpu(octree.prefixes, octree.childOffsets, rawPtr(centers), box, rawPtr(tree) + firstFocusNode,
+        markMacsGpu(od.prefixes, od.childOffsets, od.parents, rawPtr(centers), box, rawPtr(tree) + firstFocusNode,
                     lastFocusNode - firstFocusNode, false, rawPtr(macs));
     };
 
@@ -198,6 +194,6 @@ int main()
 
     auto macsCpu = benchmarkMacsCpu(h_octree, h_centers.data(), box, h_tree, firstFocusNode, lastFocusNode);
 
-    thrust::host_vector<char> macsGpuDl = macs;
-    std::cout << "GPU matches CPU " << std::equal(macsCpu.begin(), macsCpu.end(), macsGpuDl.begin());
+    thrust::host_vector<uint8_t> macsGpuDl = macs;
+    std::cout << "GPU matches CPU " << std::equal(macsCpu.begin(), macsCpu.end(), macsGpuDl.begin()) << std::endl;
 }

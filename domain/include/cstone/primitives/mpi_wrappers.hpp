@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Cornerstone octree
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -196,14 +180,14 @@ auto mpiGetCount(MPI_Status* status, int* count)
 }
 
 template<class Ts, class Td, std::enable_if_t<std::is_arithmetic_v<Td>, int> = 0>
-auto mpiAllreduce(const Ts* src, Td* dest, int count, MPI_Op op)
+auto mpiAllreduce(const Ts* src, Td* dest, int count, MPI_Op op, MPI_Comm comm)
 {
-    return MPI_Allreduce(src, dest, count, MpiType<Td>{}, op, MPI_COMM_WORLD);
+    return MPI_Allreduce(src, dest, count, MpiType<Td>{}, op, comm);
 }
 
 //! @brief adaptor to wrap compile-time size arrays into flattened arrays of the underlying type
 template<class Ts, class Td, std::enable_if_t<!std::is_arithmetic_v<Td>, int> = 0>
-auto mpiAllreduce(const Ts* src, Td* dest, int count, MPI_Op op)
+auto mpiAllreduce(const Ts* src, Td* dest, int count, MPI_Op op, MPI_Comm comm)
 {
     using ValueType    = typename Td::value_type;
     constexpr size_t N = Td{}.size();
@@ -212,11 +196,11 @@ auto mpiAllreduce(const Ts* src, Td* dest, int count, MPI_Op op)
     auto src_ptr  = reinterpret_cast<const SrcType*>(src);
     auto dest_ptr = reinterpret_cast<ValueType*>(dest);
 
-    return mpiAllreduce(src_ptr, dest_ptr, count * N, op);
+    return mpiAllreduce(src_ptr, dest_ptr, count * N, op, comm);
 }
 
 template<class Ts, class Td, std::enable_if_t<std::is_arithmetic_v<Td>, int> = 0>
-auto mpiAllgatherv(const Ts* src, int sendCount, Td* dest, int* counts, int* displ, MPI_Comm comm)
+auto mpiAllgatherv(const Ts* src, int sendCount, Td* dest, const int* counts, const int* displ, MPI_Comm comm)
 {
     return MPI_Allgatherv(src, sendCount, MpiType<Td>{}, dest, counts, displ, MpiType<Td>{}, comm);
 }

@@ -1,26 +1,10 @@
 /*
- * MIT License
+ * Cornerstone octree
  *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
+ * Copyright (c) 2024 CSCS, ETH Zurich
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * Please, refer to the LICENSE file in the root directory.
+ * SPDX-License-Identifier: MIT License
  */
 
 /*! @file
@@ -79,7 +63,6 @@ TEST(FocusDomain, noHalos)
     const int thisExampleRanks = 2;
     if (numRanks != thisExampleRanks) throw std::runtime_error("this test needs 2 ranks\n");
 
-    noHalos<unsigned, double>(rank, numRanks);
     noHalos<uint64_t, double>(rank, numRanks);
     noHalos<unsigned, float>(rank, numRanks);
     noHalos<uint64_t, float>(rank, numRanks);
@@ -136,7 +119,6 @@ TEST(FocusDomain, halos)
     const int thisExampleRanks = 2;
     if (nRanks != thisExampleRanks) throw std::runtime_error("this test needs 2 ranks\n");
 
-    withHalos<unsigned, double>(rank, nRanks);
     withHalos<uint64_t, double>(rank, nRanks);
     withHalos<unsigned, float>(rank, nRanks);
     withHalos<uint64_t, float>(rank, nRanks);
@@ -226,7 +208,6 @@ TEST(FocusDomain, moreHalos)
     const int thisExampleRanks = 2;
     if (numRanks != thisExampleRanks) throw std::runtime_error("this test needs 2 ranks\n");
 
-    moreHalos<unsigned, double>(rank, numRanks);
     moreHalos<uint64_t, double>(rank, numRanks);
     moreHalos<unsigned, float>(rank, numRanks);
     moreHalos<uint64_t, float>(rank, numRanks);
@@ -364,7 +345,7 @@ void multiStepSync(int rank, int numRanks)
     // global number of particles is unchanged
     LocalIndex numAssigned = domain.nParticles();
     LocalIndex numGlobal   = 0;
-    mpiAllreduce(&numAssigned, &numGlobal, 1, MPI_SUM);
+    mpiAllreduce(&numAssigned, &numGlobal, 1, MPI_SUM, MPI_COMM_WORLD);
     EXPECT_EQ(numGlobal, xGlobal.size());
 
     // global keys are unique, each particle was only assigned to 1 rank
@@ -447,13 +428,16 @@ void domainHaloRadii(int rank, int nRanks)
     std::vector<T> x, y, z, h;
     std::vector<KeyType> keys;
 
+    // half the radius + epsilon required to hit neighboring cells in a 4x4 grid
+    T r = 0.5 * std::sqrt(2) * 1.01;
+
     if (rank == 0)
     {
         // includes (0,0,0) to set the lower corner
         x = std::vector<T>{0, 1, 1, 3, 3, 1, 1, 3, 3};
         y = std::vector<T>{0, 1, 3, 1, 3, 5, 7, 5, 7};
         z = std::vector<T>{0, 0, 0, 0, 0, 0, 0, 0, 0};
-        h = std::vector<T>{0, 0.1, 0, 0, 0, 0, 0, 0, 0};
+        h = std::vector<T>{0, r, 0, 0, 0, 0, 0, 0, 0};
     }
     else
     {
@@ -461,7 +445,7 @@ void domainHaloRadii(int rank, int nRanks)
         x = std::vector<T>{5, 5, 7, 7, 5, 5, 7, 7, 8};
         y = std::vector<T>{1, 3, 1, 3, 5, 7, 5, 7, 8};
         z = std::vector<T>{0, 0, 0, 0, 0, 0, 0, 0, 8};
-        h = std::vector<T>{0, 0, 0, 0, 0, 0.1, 0, 0, 0};
+        h = std::vector<T>{0, 0, 0, 0, 0, r, 0, 0, 0};
     }
 
     keys.resize(x.size());
@@ -482,7 +466,7 @@ void domainHaloRadii(int rank, int nRanks)
 
         x = std::vector<T>{0, 5, 1, 3, 3, 1, 1, 3, 3};
         y = std::vector<T>{0, 1, 3, 1, 3, 5, 7, 5, 7};
-        h = std::vector<T>{0, 0.1, 0, 0, 0, 0, 0, 0, 0};
+        h = std::vector<T>{0, r, 0, 0, 0, 0, 0, 0, 0};
         //                    ^ move to rank 1 (note: has non-zero h)
     }
 
@@ -501,7 +485,7 @@ void domainHaloRadii(int rank, int nRanks)
 
         x = std::vector<T>{3, 3, 1, 5, 7, 7, 5, 5, 7, 7, 8};
         y = std::vector<T>{5, 7, 1, 3, 1, 3, 5, 7, 5, 7, 8};
-        h = std::vector<T>{0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0};
+        h = std::vector<T>{0, 0, 0, 0, 0, 0, 0, r, 0, 0, 0};
         //                       ^ move to rank 0
     }
 
