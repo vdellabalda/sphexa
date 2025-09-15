@@ -34,6 +34,7 @@
 
 #include "cooling/chemistry_data.hpp"
 #include "sph/particles_data.hpp"
+#include "cluster/cluster_data.hpp"
 
 namespace sphexa
 {
@@ -56,6 +57,9 @@ public:
     //! @brief chemistry data for radiative cooling, e.g. for GRACKLE
     ChemData chem;
 
+     //! @brief cluster data for dark matter clustering
+    ClusterData clust;
+
     //! @brief non-spacially distributed nuclear abundances
     // NuclearData nuclear;
 
@@ -66,6 +70,7 @@ public:
     {
         hydro.setOutputFields(outFields);
         chem.setOutputFields(outFields);
+        clust.setOutputFields(outFields);
 
         if (!outFields.empty())
         {
