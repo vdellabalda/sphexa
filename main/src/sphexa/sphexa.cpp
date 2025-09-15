@@ -12,7 +12,7 @@
  * furnished to do so, subject to the following conditions:
  *
  * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
+ * copies or substantial portions of the Software.  
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -44,6 +44,7 @@
 #include "io/factory.hpp"
 #include "observables/factory.hpp"
 #include "propagator/factory.hpp"
+#include "clusterer/factory.hpp"
 #include "sph/types.hpp"
 #include "util/timer.hpp"
 #include "util/utils.hpp"
@@ -98,6 +99,11 @@ int main(int argc, char** argv)
     std::string              outFile      = parser.get("-o", "dump_" + removeModifiers(initCond));
     std::string              profFile     = parser.get("-op", std::string("profile"));
 
+    const bool               findClusters = parser.exists("--find-clusters");
+    const float              b            = parser.get("--percolation", 0.2);
+
+    const std::string clustChoice = "dark";
+
     std::ofstream nullOutput("/dev/null");
     std::ostream& output = (quiet || rank) ? nullOutput : std::cout;
     std::ofstream constantsFile(fs::path(outFile).parent_path() / fs::path("constants.txt"));
@@ -108,6 +114,7 @@ int main(int argc, char** argv)
     auto simInit     = initializerFactory<Dataset>(initCond, glassBlock, fileReader.get());
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
     auto observables = observablesFactory<Dataset>(simInit->constants(), constantsFile);
+    auto clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
 
     Dataset simData;
     simData.comm = MPI_COMM_WORLD;
@@ -139,6 +146,11 @@ int main(int argc, char** argv)
     Domain   domain(rank, numRanks, bucketSize, bucketSizeFocus, theta, box);
     domain.setGrowthAllocRate(simData.hydro.getAllocGrowthRate());
 
+    float meanInterparticleSeparation = std::pow(1.0/d.numParticlesGlobal, 1.0/3.0);
+    float percolationLength = b*meanInterparticleSeparation;
+    domain.setHaloFactor(1.0);
+    simData.clust.setPercolationLength(percolationLength);
+
     propagator->sync(domain, simData);
     if (rank == 0) std::cout << "Domain synchronized, nLocalParticles " << d.x.size() << std::endl;
 
@@ -166,6 +178,17 @@ int main(int argc, char** argv)
              (isWallClockReached && writeEnabled) || isOutputTriggered) &&
             d.iteration > startIteration;
 
+        if (isOutputTriggered && findClusters && propagator->isSynced())
+        {
+            clusterer.findClusters(domain, simData);
+            fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
+            simData.clust.loadOrStoreAttributes(fileWriter.get());
+            box.loadOrStore(fileWriter.get());
+            clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
+            clusterer->save(fileWriter.get());
+            fileWriter->closeStep();
+        }
+
         if (isOutputTriggered && propagator->isSynced())
         {
             fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
@@ -176,6 +199,7 @@ int main(int argc, char** argv)
             fileWriter->closeStep();
             isOutputTriggered = false;
         }
+
         keepRunning = not(stopConditionReached(d.iteration, d.ttot, maxStepStr) || isWallClockReached) ||
                       not propagator->isSynced();
 
