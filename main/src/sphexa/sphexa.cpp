@@ -149,7 +149,7 @@ int main(int argc, char** argv)
     float meanInterparticleSeparation = std::pow(1.0/d.numParticlesGlobal, 1.0/3.0);
     float percolationLength = b*meanInterparticleSeparation;
     domain.setHaloFactor(1.0);
-    simData.clust.setPercolationLength(percolationLength);
+    domain.setPercLength(0.0);
 
     propagator->sync(domain, simData);
     if (rank == 0) std::cout << "Domain synchronized, nLocalParticles " << d.x.size() << std::endl;
@@ -162,6 +162,7 @@ int main(int argc, char** argv)
 
     for (bool keepRunning = true; keepRunning; d.iteration++)
     {
+        if (findClusters && isOutputTriggered) { domain.setPercLength(percolationLength); }
         propagator->computeForces(domain, simData);
         box = domain.box();
 
@@ -180,8 +181,8 @@ int main(int argc, char** argv)
 
         if (isOutputTriggered && findClusters && propagator->isSynced())
         {
-            clusterer.findClusters(domain, simData);
-            fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
+            clusterer->findClusters(domain, simData);
+            fileWriter->addStep(domain.startIndex(), domain.endIndex(), "cluster"+outFile);
             simData.clust.loadOrStoreAttributes(fileWriter.get());
             box.loadOrStore(fileWriter.get());
             clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
@@ -214,6 +215,7 @@ int main(int argc, char** argv)
             auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
             if (profEnabled) { propagator->writeMetrics(fileWriterSeq.get(), profFile); }
         }
+        domain.setPercLength(0.0);
     }
     totalTimer.step("Total execution time of " + std::to_string(d.iteration - startIteration) + " iterations of " +
                     initCond + " up to t = " + std::to_string(d.ttot));
