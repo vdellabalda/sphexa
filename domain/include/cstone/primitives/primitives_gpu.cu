@@ -22,6 +22,7 @@
 #include <thrust/reduce.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
+#include <thrust/unique.h>
 
 #include "cstone/cuda/cub.hpp"
 #include "cstone/cuda/errorcheck.cuh"
@@ -64,9 +65,17 @@ void scaleGpu(T* first, T* last, T value)
 {
     thrust::transform(thrust::device, first, last, first, ScaleFunctor<T>(value));
 }
-
 template void scaleGpu(double*, double*, double);
 template void scaleGpu(float*, float*, float);
+
+template<class T, class Tf>
+void multiplyElementWiseGpu(T* first, T* last, const Tf* factors)
+{
+    thrust::transform(thrust::device, first, last, factors, first, thrust::multiplies<T>{});
+}
+template void multiplyElementWiseGpu(unsigned*, unsigned*, const unsigned*);
+template void multiplyElementWiseGpu(unsigned*, unsigned*, const bool*);
+
 
 template<class TS, class TD, class IndexType>
 __global__ void gatherGpuKernel(const IndexType* map, size_t n, const TS* source, TD* destination)
@@ -243,12 +252,37 @@ void sequenceMax(const T1* i1_begin, const T1* i1_end, const T2* i2, Tout* outpu
 template void sequenceMax(const unsigned*, const unsigned*, const unsigned*, unsigned*);
 
 template<class Tin, class Tout>
-Tout reduceGpu(const Tin* input, size_t numElements, Tout init)
+Tout reduceGpu(const Tin* input, size_t numElements, Tout init) 
 {
     return thrust::reduce(thrust::device, input, input + numElements, init);
 }
 
 template size_t reduceGpu(const unsigned*, size_t, size_t);
+template int reduceGpu(const unsigned*, size_t, int);
+
+template<class KeyType, class Tin, class Tout>
+std::pair<KeyType*, Tout*> reduceByKeyGpu(
+    const KeyType* keysFirst, const KeyType* keysLast,
+    const Tin*     valuesFirst,
+    KeyType*       keysOut,
+    Tout*          valuesOut
+)
+{
+    thrust::pair<KeyType*, Tout*> new_end = thrust::reduce_by_key(
+        thrust::device,
+        keysFirst, keysLast,
+        valuesFirst,
+        keysOut,
+        valuesOut);
+    return std::pair(new_end.first, new_end.second);
+}
+
+template std::pair<long unsigned*, unsigned*> reduceByKeyGpu(
+    const long unsigned*, const long unsigned*,
+    const unsigned*,
+    long unsigned*,
+    unsigned*
+);
 
 template<class IndexType>
 void sequenceGpu(IndexType* input, size_t numElements, IndexType init)
@@ -290,6 +324,15 @@ void sortGpu(KeyType* first, KeyType* last, KeyType* keyBuf)
 template void sortGpu(uint32_t*, uint32_t*, uint32_t*);
 template void sortGpu(uint64_t*, uint64_t*, uint64_t*);
 template void sortGpu(float*, float*, float*);
+
+template<class EdgeType>
+void sortGpu(EdgeType* first, EdgeType* last)
+{
+    thrust::sort(thrust::device, first, last);
+}
+template void sortGpu(util::array<uint32_t, 2>*, util::array<uint32_t, 2>*);
+template void sortGpu(util::array<uint64_t, 2>*, util::array<uint64_t, 2>*);
+template void sortGpu(uint64_t*, uint64_t*);
 
 // Determine temporary device storage requirements
 template<class KeyType, class ValueType>
@@ -355,9 +398,18 @@ void sortByKeyGpu(KeyType* first, KeyType* last, ValueType* values)
 
 template void sortByKeyGpu(unsigned*, unsigned*, unsigned*);
 template void sortByKeyGpu(unsigned*, unsigned*, int*);
+template void sortByKeyGpu(unsigned*, unsigned*, uint64_t*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, unsigned*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, int*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, uint64_t*);
+
+template<class KeyType, class ValueType>
+void sortByKeyDescendGpu(KeyType* first, KeyType* last, ValueType* values)
+{
+    thrust::stable_sort_by_key(thrust::device, first, last, values, thrust::greater<KeyType>{});
+}
+
+template void sortByKeyDescendGpu(unsigned*, unsigned*, uint64_t*);
 
 template<class IndexType, class SumType>
 void exclusiveScanGpu(const IndexType* first, const IndexType* last, SumType* output, SumType init)
@@ -433,5 +485,73 @@ void selectCopyGpu(const TS* src, LocalIndex n, const S* selectFlags, TD* dest)
 
 template void selectCopyGpu(const int*, LocalIndex, const unsigned*, unsigned*);
 template void selectCopyGpu(const unsigned*, LocalIndex, const unsigned*, unsigned*);
+
+template<class TS, class TD, class S>
+__global__ void selectCompactCopyKernel(const TS* src, LocalIndex n, const S* selectFlags, const LocalIndex* index, TD* dest)
+{
+    LocalIndex tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < n && selectFlags[tid]) 
+    { 
+        dest[index[tid]-1] = src[tid];
+    }
+}
+
+template<class TS, class TD, class S>
+void selectCompactCopyGpu(const TS* src, LocalIndex n, const S* selectFlags, const LocalIndex* index, TD* dest)
+{
+    int numThreads = 256;
+    int numBlocks  = (n + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    selectCompactCopyKernel<<<numBlocks, numThreads>>>(src, n, selectFlags, index, dest);
+}
+
+template void selectCompactCopyGpu(const uint64_t*, LocalIndex, const LocalIndex*, const LocalIndex*, uint64_t*);
+
+template<class EdgeType>
+EdgeType* uniqueGpu(EdgeType* first, EdgeType* last)
+{
+    EdgeType* newEnd = thrust::unique(thrust::device, first, last);
+    return newEnd;
+}
+
+template util::array<uint32_t, 2>* uniqueGpu(util::array<uint32_t, 2>*, util::array<uint32_t, 2>*);
+template util::array<uint64_t, 2>* uniqueGpu(util::array<uint64_t, 2>*, util::array<uint64_t, 2>*);
+template uint64_t* uniqueGpu(uint64_t*, uint64_t*);
+
+template<class IndexType>
+size_t uniqueCountGpu(const IndexType* first, const IndexType* last)
+{
+    return thrust::unique_count(thrust::device, first, last);
+}
+
+template size_t uniqueCountGpu(const unsigned*, const unsigned*);
+template size_t uniqueCountGpu(const unsigned long*, const unsigned long*);
+
+template<class KeyType, class IndexType>
+void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in,
+    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out)
+{
+    // Determine temporary device storage requirements
+    void     *d_temp_storage = nullptr;
+    size_t   temp_storage_bytes = 0;
+    checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
+        d_temp_storage, temp_storage_bytes,
+        d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
+
+    // Allocate temporary storage
+    checkGpuErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+    
+    // Run encoding 
+    checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
+        d_temp_storage, temp_storage_bytes,
+        d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
+
+    checkGpuErrors(cudaFree(d_temp_storage));
+}
+
+template void runLengthEncodeGpu(const unsigned long, const unsigned*,
+    unsigned*, unsigned*, unsigned*);
+template void runLengthEncodeGpu(const unsigned long, const uint64_t*,
+    uint64_t*, unsigned*, unsigned*);
 
 } // namespace cstone

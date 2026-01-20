@@ -28,6 +28,9 @@ extern void fillGpu(T* first, T* last, T value);
 template<class T>
 extern void scaleGpu(T* first, T* last, T value);
 
+template<class T, class Tf>
+extern void multiplyElementWiseGpu(T* first, T* last, const Tf* factors);
+
 template<class TS, class TD, class IndexType>
 extern void gatherGpu(const IndexType* ordering, size_t numElements, const TS* src, TD* buffer);
 
@@ -62,6 +65,15 @@ extern void sequenceMax(const T1* i1_begin, const T1* i1_end, const T2* i2, Tout
 template<class Tin, class Tout>
 extern Tout reduceGpu(const Tin* input, size_t numElements, Tout init);
 
+template<class KeyType, class Tin, class Tout>
+extern std::pair<KeyType*, Tout*> reduceByKeyGpu(
+    const KeyType* keysFirst,
+    const KeyType* keysLast,
+    const Tin* valuesFirst,
+    KeyType* keysOut,
+    Tout* valuesOut
+);
+
 template<class IndexType>
 extern void sequenceGpu(IndexType* input, size_t numElements, IndexType init);
 
@@ -74,6 +86,9 @@ extern void sequenceGpu(IndexType* input, size_t numElements, IndexType init);
 template<class KeyType>
 extern void sortGpu(KeyType* first, KeyType* last, KeyType* keyBuf);
 
+template<class EdgeType>
+extern void sortGpu(EdgeType* first, EdgeType* last);
+
 //! @brief Determine temporary device storage requirements for sortByKeyGpu
 template<class KeyType, class ValueType>
 extern uint64_t sortByKeyTempStorage(uint64_t numElements);
@@ -84,6 +99,9 @@ sortByKeyGpu(KeyType* first, KeyType* last, ValueType* values, KeyType* keyBuf, 
 
 template<class KeyType, class ValueType>
 extern void sortByKeyGpu(KeyType* first, KeyType* last, ValueType* values);
+
+template<class KeyType, class ValueType>
+extern void sortByKeyDescendGpu(KeyType* first, KeyType* last, ValueType* values);
 
 template<class IndexType, class SumType>
 extern void exclusiveScanGpu(const IndexType* first, const IndexType* last, SumType* output, SumType init);
@@ -102,5 +120,18 @@ extern size_t countGpu(const ValueType* first, const ValueType* last, ValueType 
 
 template<class TS, class TD, class S>
 extern void selectCopyGpu(const TS* src, LocalIndex n, const S* selectFlags, TD* dest);
+
+template<class TS, class TD, class S>
+extern void selectCompactCopyGpu(const TS* src, LocalIndex n, const S* selectFlags, const LocalIndex* index, TD* dest);
+
+template<class EdgeType>
+extern EdgeType* uniqueGpu(EdgeType* first, EdgeType* last);
+
+template<class IndexType>
+extern size_t uniqueCountGpu(const IndexType* first, const IndexType* last);
+
+template<class KeyType, class IndexType>
+extern void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in, KeyType* d_unique_out, IndexType* d_counts_out,
+    IndexType* d_num_runs_out);
 
 } // namespace cstone

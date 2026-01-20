@@ -100,7 +100,9 @@ int main(int argc, char** argv)
     std::string              profFile     = parser.get("-op", std::string("profile"));
 
     const bool               findClusters = parser.exists("--find-clusters");
-    const float              b            = parser.get("--percolation", 0.2);
+    const float              b             = parser.get("--percolation-factor", 0.2);
+    const double             percolationLengthDefault = parser.get("--percolation-length", 0.0);
+    const int                clusterThreshold = parser.get("--cluster-threshold", 64);
 
     const std::string clustChoice = "dark";
 
@@ -114,7 +116,7 @@ int main(int argc, char** argv)
     auto simInit     = initializerFactory<Dataset>(initCond, glassBlock, fileReader.get());
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
     auto observables = observablesFactory<Dataset>(simInit->constants(), constantsFile);
-    auto clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
+    std::unique_ptr<Clusterer<Domain, Dataset>> clusterer;
 
     Dataset simData;
     simData.comm = MPI_COMM_WORLD;
@@ -129,7 +131,10 @@ int main(int argc, char** argv)
     auto box = simInit->init(rank, numRanks, problemSize, simData, fileReader.get());
 
     auto& d = simData.hydro;
+    auto& c = simData.clust;
+    auto& h = simData.halo;
     migrateToDevice(d, 0, d.x.size());
+
     simData.setOutputFields(outputFields.empty() ? propagator->conservedFields() : outputFields);
 
     if (parser.exists("--G")) { d.g = parser.get<double>("--G"); }
@@ -145,10 +150,6 @@ int main(int argc, char** argv)
     uint64_t bucketSize = std::max(bucketSizeFocus, d.numParticlesGlobal / (100 * numRanks));
     Domain   domain(rank, numRanks, bucketSize, bucketSizeFocus, theta, box);
     domain.setGrowthAllocRate(simData.hydro.getAllocGrowthRate());
-
-    float meanInterparticleSeparation = std::pow(1.0/d.numParticlesGlobal, 1.0/3.0);
-    float percolationLength = b*meanInterparticleSeparation;
-    domain.setHaloFactor(1.0);
     domain.setPercLength(0.0);
 
     propagator->sync(domain, simData);
@@ -157,12 +158,35 @@ int main(int argc, char** argv)
     viz::init_catalyst(argc, argv);
     viz::init_ascent(d, domain.startIndex());
 
-    size_t startIteration    = d.iteration;
-    bool   isOutputTriggered = false;
+    double percolationLength;
+    if (findClusters)
+    {   
+        clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
+        clusterer->activateFields(simData);
+        clusterer->setNumRanks(numRanks);
+        migrateToDevice(c, 0, c.halo_id.size());
+        
+        double simulationVolume = box.lx()*box.ly()*box.lz();
+        double meanInterparticleSeparation = std::pow(simulationVolume/d.numParticlesGlobal, 1.0/3.0);
+        percolationLength = b*meanInterparticleSeparation;
+        if (percolationLengthDefault > 0.0)
+        {
+            percolationLength = percolationLengthDefault;
+        }
+        simData.clust.setPercLength(percolationLength);
+        simData.clust.numParticlesGlobal = d.numParticlesGlobal;
+        simData.clust.clusterThreshold = clusterThreshold;
 
+        if (rank==0) { std::cout << "FOF clustering activated with percolation length " << percolationLength << " and cluster threshold " << clusterThreshold << std::endl;}
+    }
+
+    size_t startIteration    = d.iteration;
+    bool   isOutputTriggered = true;
+    
     for (bool keepRunning = true; keepRunning; d.iteration++)
     {
-        if (findClusters && isOutputTriggered) { domain.setPercLength(percolationLength); }
+        domain.setPercLength((findClusters) ? percolationLength : 0.0);
+
         propagator->computeForces(domain, simData);
         box = domain.box();
 
@@ -179,25 +203,28 @@ int main(int argc, char** argv)
              (isWallClockReached && writeEnabled) || isOutputTriggered) &&
             d.iteration > startIteration;
 
-        if (isOutputTriggered && findClusters && propagator->isSynced())
-        {
-            clusterer->findClusters(domain, simData);
-            fileWriter->addStep(domain.startIndex(), domain.endIndex(), "cluster"+outFile);
-            simData.clust.loadOrStoreAttributes(fileWriter.get());
-            box.loadOrStore(fileWriter.get());
-            clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
-            clusterer->save(fileWriter.get());
-            fileWriter->closeStep();
-        }
+        isOutputTriggered = true;
 
         if (isOutputTriggered && propagator->isSynced())
         {
+            if (findClusters) clusterer->findClusters(domain, simData);
+
             fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
             simData.hydro.loadOrStoreAttributes(fileWriter.get());
             box.loadOrStore(fileWriter.get());
             propagator->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
             propagator->save(fileWriter.get());
+
+            if (findClusters)
+            {
+                fileWriter->addStep(domain.startIndex(), domain.endIndex(), "halo_"+outFile);
+                simData.clust.loadOrStoreAttributes(fileWriter.get());
+                clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
+                clusterer->save(fileWriter.get());
+            }
+
             fileWriter->closeStep();
+
             isOutputTriggered = false;
         }
 
@@ -215,7 +242,7 @@ int main(int argc, char** argv)
             auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
             if (profEnabled) { propagator->writeMetrics(fileWriterSeq.get(), profFile); }
         }
-        domain.setPercLength(0.0);
+
     }
     totalTimer.step("Total execution time of " + std::to_string(d.iteration - startIteration) + " iterations of " +
                     initCond + " up to t = " + std::to_string(d.ttot));

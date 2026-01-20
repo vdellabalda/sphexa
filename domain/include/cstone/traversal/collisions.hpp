@@ -77,19 +77,23 @@ void findHalos(const KeyType* prefixes,
                const Box<Tc>& box,
                TreeNodeIndex firstNode,
                TreeNodeIndex lastNode,
-               uint8_t* collisionFlags)
+               uint8_t* collisionFlags,
+               const Tc percLength = 0.0)
 {
     KeyType lowestKey  = leaves[firstNode];
     KeyType highestKey = leaves[lastNode];
+    Vec3<Tc> percBound = Vec3<Tc>{percLength, percLength, percLength};
 
 #pragma omp parallel for
     for (TreeNodeIndex leafIdx = firstNode; leafIdx < lastNode; ++leafIdx)
     {
+        //Vec3<Tc> searchSize = searchSizes[leafIdx]+percBound;
+        Vec3<Tc> searchSize = searchSizes[leafIdx] + percBound;
         // if the halo box is fully inside the assigned SFC range, we skip collision detection
-        if (containedIn(lowestKey, highestKey, searchCenters[leafIdx], searchSizes[leafIdx], box)) { continue; }
+        if (containedIn(lowestKey, highestKey, searchCenters[leafIdx], searchSize, box)) { continue; }
 
         findCollisions(prefixes, childOffsets, parents, nodeCenters, nodeSizes, searchCenters[leafIdx],
-                       searchSizes[leafIdx], box, lowestKey, highestKey, collisionFlags);
+                       searchSize, box, lowestKey, highestKey, collisionFlags);
     }
 }
 

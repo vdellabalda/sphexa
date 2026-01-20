@@ -1,30 +1,5 @@
-/*
- * MIT License
- *
- * SPH-EXA
- * Copyright (c) 2024 CSCS, ETH Zurich, University of Basel, University of Zurich
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
 /*! @file
- * @brief Interface for clustering particles into groups
+ * @brief An interface for different types of clusterers
  *
  * @author Vincente Della Balda vinc.dellabalda@gmail.com>
  */
@@ -33,18 +8,22 @@
 
 #include <variant>
 
-#include "cstone/primitives/accel_switch.hpp"
+#include "cstone/sfc/box.hpp"
 #include "io/ifile_io.hpp"
+#include "sph/particles_data.hpp"
 #include "util/pm_reader.hpp"
 #include "util/timer.hpp"
+
 
 namespace sphexa
 {
 
-template<class DomainType, class ClusterDataType>
+template<class DomainType, class ParticleDataType>
 class Clusterer
 {
-    using T = typename ClusterDataType::KeyType;
+    using T              = typename ParticleDataType::RealType;
+    using KeyType        = typename ParticleDataType::KeyType;
+
 
 public:
     Clusterer(std::ostream& output, int rank)
@@ -68,10 +47,29 @@ public:
         pmReader.writeTimings(writer, outFile);
     };
 
+    int getRank() { return rank_; }
+    void setNumRanks(int numRanks) { numRanks_ = numRanks; }
+    int getNumRanks() { return numRanks_; }
+    
+    //! @brief get a list of field strings marked as conserved at runtime
+    virtual std::vector<std::string> conservedFields() const = 0;
+
+    //! @brief Marks conserved and dependent fields inside the particle dataset as active, enabling memory allocation
+    virtual void activateFields(ParticleDataType& d) = 0;
+
     //! @brief save particle data fields to file
     virtual void saveFields(IFileWriter*, size_t, size_t, ParticleDataType&, const cstone::Box<T>&){};
 
-    void findClusters(DomainType& domain, ParticleDataType& d, double percolationLength, int numRanks){};
+    //! @brief save internal state to file
+    virtual void save(IFileWriter*) {}
+
+    //! @brief load internal state from file
+    virtual void load(const std::string& path, IFileReader*) {}
+
+    //! @brief synchronize computational domain
+    virtual void sync(DomainType& domain, ParticleDataType& d){};
+
+    virtual void findClusters(DomainType& domain, ParticleDataType& d){};
 
     virtual ~Clusterer() = default;
 
@@ -118,6 +116,7 @@ protected:
     Timer         timer;
     PmReader      pmReader;
     int           rank_;
+    int           numRanks_;
 };
 
 } // namespace sphexa

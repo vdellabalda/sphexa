@@ -1,30 +1,6 @@
-/*
- * MIT License
- *
- * Copyright (c) 2022 CSCS, ETH Zurich
- *               2022 University of Basel
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
 /*! @file
  * @brief Contains the object holding cluster data on the GPU
+ * @author Vincente Della Balda <vinc.dellabalda@gmail.com>
  * @author Sebastian Keller <sebastian.f.keller@gmail.com>
  */
 
@@ -36,13 +12,15 @@
 #include "cstone/cuda/device_vector.h"
 #include "cstone/fields/field_states.hpp"
 #include "cstone/primitives/primitives_gpu.h"
-#include "cstone/primitives/accel_switch.hpp"
+#include "cstone/primitives/primitives_acc.hpp"
 #include "cstone/tree/definitions.h"
 #include "cstone/util/reallocate.hpp"
 
+#include "definitions.h"
+
 #include "sph/types.hpp"
 
-namespace sphexa
+namespace cluster
 {
 
 class DeviceClusterData : public cstone::FieldStates<DeviceClusterData>
@@ -52,6 +30,10 @@ class DeviceClusterData : public cstone::FieldStates<DeviceClusterData>
 
     using KeyType   = sph::SphTypes::KeyType;
     using RealType  = sph::SphTypes::CoordinateType;
+    using ClusterIdType = cluster::ClusterIdType;
+    using ClusterKeyType = cluster::ClusterKeyType;
+    using EdgeType = cluster::EdgeType;
+    using IdType         = unsigned;
 
 public:
     // number of CUDA streams to use
@@ -69,19 +51,44 @@ public:
      * The length of these arrays equals the local number of particles including halos
      * if the field is active and is zero if the field is inactive.
      */
-    DevVector<KeyType>  id;                                 // unique particle id
-    DevVector<KeyType>  halo_id;                            // halo id
+    DevVector<ClusterIdType>    halo_id;
+    DevVector<ClusterIdType>    flagged;
+    DevVector<ClusterKeyType>   localClusterKeys;
+    DevVector<ClusterKeyType>   globalClusterKeys;
+
+    // temporary arrays for sorting and run-length encoding
+    DevVector<ClusterIdType>    idBuf;
+    DevVector<ClusterKeyType>   keyBuf;
+    DevVector<unsigned>         thresholdMask;
+    DevVector<ClusterIdType>    idMap;
+    
+    // temporary array for edge construction
+    DevVector<ClusterKeyType>   edgeSrc;
+    DevVector<ClusterKeyType>   edgeDst;
+    DevVector<EdgeType>         edges;
 
     DevVector<cstone::LocalIndex> traversalStack;
 
+    /*! @brief Cluster fields */
+    DevVector<ClusterKeyType>   uniqueKeys;
+    DevVector<IdType>           keyCounts;
+    DevVector<IdType>           clusterParents;
+    DevVector<unsigned>         clusterOwner;
+    DevVector<ClusterKeyType>   nonLocalKeys;
+    DevVector<ClusterKeyType>   localKeys;
+
+    // Number of local clusters
+    DevVector<unsigned>           numClusters;
+    
+
     //! @brief non-stateful variables for statistics
     size_t stackUsedEc;
+    size_t edgesFoundEc;
 
     /*! @brief
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
-    inline static constexpr std::array fieldNames{
-        "id", "halo_id"};
+    inline static constexpr std::array fieldNames{"halo_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys"};
 
     /*! @brief return a tuple of field references
      *
@@ -89,7 +96,7 @@ public:
      */
     auto dataTuple()
     {
-        auto ret = std::tie(id, halo_id);
+        auto ret = std::tie(halo_id, flagged, idBuf, keyBuf, localClusterKeys, globalClusterKeys);
 
         static_assert(std::tuple_size_v<decltype(ret)> == fieldNames.size());
         return ret;
@@ -162,79 +169,5 @@ public:
         }
     }
 };
-
-template<class DataType, std::enable_if_t<cstone::HaveGpu<typename DataType::AcceleratorType>{}, int> = 0>
-void transferToDevice(DataType& d, size_t first, size_t last, const std::vector<std::string>& fields)
-{
-    auto hostData   = d.data();
-    auto deviceData = d.devData.data();
-
-    auto launchTransfer = [first, last](const auto* hostField, auto* deviceField)
-    {
-        using Type1 = std::decay_t<decltype(*hostField)>;
-        using Type2 = std::decay_t<decltype(*deviceField)>;
-        if constexpr (std::is_same_v<typename Type1::value_type, typename Type2::value_type>)
-        {
-            assert(hostField->size() > 0);
-            assert(deviceField->size() > 0);
-            size_t transferSize = (last - first) * sizeof(typename Type1::value_type);
-            checkGpuErrors(cudaMemcpy(rawPtr(*deviceField) + first, hostField->data() + first, transferSize,
-                                      cudaMemcpyHostToDevice));
-        }
-        else { throw std::runtime_error("Field type mismatch between CPU and GPU in copy to device"); }
-    };
-
-    for (const auto& field : fields)
-    {
-        int fieldIdx =
-            std::find(DataType::fieldNames.begin(), DataType::fieldNames.end(), field) - DataType::fieldNames.begin();
-        std::visit(launchTransfer, hostData[fieldIdx], deviceData[fieldIdx]);
-    }
-}
-
-//! @brief transfer all specified fields allocated on both host and device to the device
-template<class DataType, std::enable_if_t<cstone::HaveGpu<typename DataType::AcceleratorType>{}, int> = 0>
-void transferAllocatedToDevice(DataType& d, size_t first, size_t last, const std::vector<std::string>& fields)
-{
-    for (const auto& field : fields)
-    {
-        if (d.isAllocated(field) && d.devData.isAllocated(field)) { transferToDevice(d, first, last, {field}); }
-    }
-}
-
-template<class DataType, std::enable_if_t<cstone::HaveGpu<typename DataType::AcceleratorType>{}, int> = 0>
-void transferToHost(DataType& d, size_t first, size_t last, const std::vector<std::string>& fields)
-{
-    auto hostData   = d.data();
-    auto deviceData = d.devData.data();
-
-    auto launchTransfer = [first, last](auto* hostField, const auto* deviceField)
-    {
-        using Type1 = std::decay_t<decltype(*hostField)>;
-        using Type2 = std::decay_t<decltype(*deviceField)>;
-        if constexpr (std::is_same_v<typename Type1::value_type, typename Type2::value_type>)
-        {
-            assert(hostField->size() > 0);
-            assert(deviceField->size() > 0);
-            size_t transferSize = (last - first) * sizeof(typename Type1::value_type);
-            checkGpuErrors(cudaMemcpy(hostField->data() + first, rawPtr(*deviceField) + first, transferSize,
-                                      cudaMemcpyDeviceToHost));
-        }
-        else { throw std::runtime_error("Field type mismatch between CPU and GPU in copy to device"); }
-    };
-
-    for (const auto& field : fields)
-    {
-        int fieldIdx =
-            std::find(DataType::fieldNames.begin(), DataType::fieldNames.end(), field) - DataType::fieldNames.begin();
-        std::visit(launchTransfer, hostData[fieldIdx], deviceData[fieldIdx]);
-    }
-}
-
-template<class Vector, class T, std::enable_if_t<IsDeviceVector<Vector>{}, int> = 0>
-void fill(Vector& v, size_t first, size_t last, T value)
-{
-    cstone::fillGpu(rawPtr(v) + first, rawPtr(v) + last, value);
-}
 
 } // namespace sphexa

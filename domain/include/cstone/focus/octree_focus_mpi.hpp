@@ -521,7 +521,8 @@ public:
                        std::span<LocalIndex> layout,
                        float searchExtFact,
                        Vector& scratch,
-                       bool accumulate)
+                       bool accumulate,
+                       RealType percLength = 0.0)
     {
         TreeNodeIndex firstNode    = assignment_[myRank_].start();
         TreeNodeIndex lastNode     = assignment_[myRank_].end();
@@ -550,7 +551,7 @@ public:
             if (not accumulate) { fillGpu(rawPtr(macsAcc_), rawPtr(macsAcc_) + macsAcc_.size(), uint8_t(0)); }
             findHalosGpu(let.prefixes, let.childOffsets, let.parents, geoCentersAcc_.data(), geoSizesAcc_.data(),
                          leavesAcc_.data(), searchCenters.data(), searchSizes.data(), box_, firstNode, lastNode,
-                         macsAcc_.data());
+                         macsAcc_.data(), percLength);
         }
         else
         {
@@ -567,7 +568,7 @@ public:
             if (not accumulate) { std::fill(rawPtr(macsAcc_), rawPtr(macsAcc_) + macsAcc_.size(), uint8_t(0)); }
             findHalos(let.prefixes, let.childOffsets, let.parents, geoCentersAcc_.data(), geoSizesAcc_.data(),
                       leaves_.data(), searchCenters.data(), searchSizes.data(), box_, firstNode, lastNode,
-                      macsAcc_.data());
+                      macsAcc_.data(), percLength);
         }
         reallocate(scratch, origSize, 1.0);
     }

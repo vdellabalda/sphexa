@@ -4,6 +4,7 @@ set(COOLING_DIR ${PROJECT_SOURCE_DIR}/physics/cooling/include)
 set(RYOANJI_DIR ${PROJECT_SOURCE_DIR}/ryoanji/src)
 set(SPH_DIR ${PROJECT_SOURCE_DIR}/sph/include)
 set(DISK_DIR ${PROJECT_SOURCE_DIR}/physics/Disk/include)
+set(CLUSTER_DIR ${PROJECT_SOURCE_DIR}/cluster/include)
 
 add_subdirectory(src)
 if (BUILD_TESTING)

@@ -1,31 +1,6 @@
-/*
- * MIT License
- *
- * Copyright (c) 2021 CSCS, ETH Zurich
- *               2021 University of Basel
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-
-/*! @file
+/*!
  * @brief Contains the object holding all cluster data
- *
+ * @author Vincente Della Balda <vinc.dellabalda@gmail.com>
  */
 
 #pragma once
@@ -37,18 +12,19 @@
 #include "cstone/cuda/cuda_utils.hpp"
 #include "cstone/fields/data_util.hpp"
 #include "cstone/fields/field_states.hpp"
-#include "cstone/primitives/accel_switch.hpp"
+#include "cstone/primitives/primitives_acc.hpp"
 #include "cstone/tree/definitions.h"
 #include "cstone/tree/octree.hpp"
 #include "cstone/util/reallocate.hpp"
 
+#include "definitions.h"
 #include "cluster_data_stubs.hpp"
 
 #if defined(USE_CUDA)
 #include "cluster_data_gpu.cuh"
 #endif
 
-namespace sphexa
+namespace cluster
 {
 
 template<class AccType>
@@ -59,6 +35,10 @@ public:
 
     using KeyType   = sph::SphTypes::KeyType;
     using RealType  = sph::SphTypes::CoordinateType;
+    using ClusterIdType = cluster::ClusterIdType;
+    using ClusterKeyType = cluster::ClusterKeyType;
+    using EdgeType = cluster::EdgeType;
+    using IdType         = unsigned;
 
     template<class ValueType>
     using PinnedVec = std::vector<ValueType, PinnedAlloc_t<AcceleratorType, ValueType>>;
@@ -69,17 +49,18 @@ public:
     using FieldVariant = std::variant<FieldVector<float>*, FieldVector<double>*, FieldVector<unsigned>*,
                                       FieldVector<uint64_t>*, FieldVector<uint8_t>*>;
 
-    ClusterData(const ClusterData&) = delete;
-
     uint64_t iteration{1};
     uint64_t numParticlesGlobal{0};
+    uint64_t numParticlesHalos{0};
+    IdType   clusterThreshold{32};
+    uint64_t numClustersGlobal{0};
 
     //! @brief default maximum number of edge buffer size per warp before partial DSU is triggered
     unsigned egmax{150};
 
     //! @brief minimum radius for edge search
     RealType percolationLength{0.0};
-    void setPercolationLength(RealType l) { percolationLength = l; }
+    void setPercLength(RealType l) { percolationLength = l; }
 
     RealType ttot{0.0};
 
@@ -128,13 +109,34 @@ public:
      * The length of these arrays equals the local number of particles including halos
      * if the field is active and is zero if the field is inactive.
      */
+         
+    FieldVector<IdType>             halo_id;
+    FieldVector<IdType>             flagged;
+    FieldVector<ClusterKeyType>     localClusterKeys;
+    FieldVector<ClusterKeyType>     globalClusterKeys;
+    
+    // temporary arrays for sorting and run-length encoding
+    FieldVector<ClusterIdType>      idBuf;
+    FieldVector<ClusterKeyType>     keyBuf;
+    FieldVector<IdType>             thresholdMask;
+    FieldVector<ClusterIdType>      idMap;
 
-    FieldVector<KeyType>  id;                                 // unique particle id
-    FieldVector<KeyType>  halo_id;                            // halo cluster id
+    // temporary array for edge construction
+    FieldVector<ClusterKeyType>     edgeSrc;
+    FieldVector<ClusterKeyType>     edgeDst;
+    FieldVector<EdgeType>           edges;
 
-    //! @brief Indices of neighbors for each particle, length is number of assigned particles * ngmax. CPU version only.
-    std::vector<cstone::LocalIndex>         neighbors;
-    cstone::OctreeNsView<RealType, KeyType> treeView;
+    /*! @brief Cluster fields */
+    FieldVector<ClusterKeyType>     uniqueKeys;
+    FieldVector<IdType>             keyCounts;
+    FieldVector<IdType>             clusterParents;
+    FieldVector<IdType>             clusterSizes;
+    FieldVector<unsigned>           clusterOwner;
+    FieldVector<ClusterKeyType>     nonLocalKeys;
+    FieldVector<ClusterKeyType>     localKeys;
+
+    // Number of local clusters
+    FieldVector<IdType>             numClusters;
 
     DeviceClusterData_t<AccType> devData;
 
@@ -142,7 +144,7 @@ public:
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
     inline static constexpr std::array fieldNames{
-        "id", "halo_id"};
+        "halo_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys"};
 
     //! @brief dataset prefix to be prepended to fieldNames for structured output
     static const inline std::string prefix{};
@@ -156,7 +158,7 @@ public:
      */
     auto dataTuple()
     {
-        auto ret = std::tie(id, halo_id);
+        auto ret = std::tie(halo_id, flagged, idBuf, keyBuf, localClusterKeys, globalClusterKeys);
 
 #if defined(__clang__) || __GNUC__ > 11
         static_assert(std::tuple_size_v<decltype(ret)> == fieldNames.size());
@@ -240,6 +242,8 @@ public:
         else { resize(size); }
     }
 
+
+
     //! @brief return the size of GPU arrays if in use, CPU arrays otherwise
     size_t accSize()
     {
@@ -252,55 +256,27 @@ public:
     std::vector<std::string> outputFieldNames;
 
     float getAllocGrowthRate() const { return allocGrowthRate_; }
+    RealType getPercLength() const { return percolationLength; }
+    uint64_t getNumParticlesHalos() const { return numParticlesHalos; }
+    IdType getClusterThreshold() const {return clusterThreshold; }
+
+    IdType getNumClusters()
+    {
+        if (cstone::HaveGpu<AccType>{})
+        {
+            memcpyD2H(rawPtr(devData.numClusters), 1, rawPtr(numClusters));
+            return numClusters.empty() ? 0 : numClusters[0];
+        }
+        else
+        {
+            return numClusters.empty() ? 0 : numClusters[0];
+        }
+    };
 
 private:
 
     //! @brief buffer growth factor when reallocating
     float allocGrowthRate_{1.05};
 };
-
-//! @brief resizes the neighbors list, only used in the CPU version
-template<class Dataset>
-void resizeNeighbors(Dataset& d, size_t size)
-{
-    auto growthRate = d.getAllocGrowthRate();
-    //! If we have a GPU, neighbors are calculated on-the-fly, so we don't need space to store them
-    reallocate(d.neighbors, cstone::HaveGpu<typename Dataset::AcceleratorType>{} ? 0 : size, growthRate);
-}
-
-template<class Dataset, class... Fs>
-void release(Dataset& d, const Fs&... fs)
-{
-    d.release(fs...);
-    d.devData.release(fs...);
-}
-
-template<class Dataset, class... Fs>
-void acquire(Dataset& d, const Fs&... fs)
-{
-    d.acquire(fs...);
-    d.devData.acquire(fs...);
-}
-
-template<class Dataset, std::enable_if_t<not cstone::HaveGpu<typename Dataset::AcceleratorType>{}, int> = 0>
-void transferToDevice(Dataset&, size_t, size_t, const std::vector<std::string>&)
-{
-}
-
-template<class Dataset, std::enable_if_t<not cstone::HaveGpu<typename Dataset::AcceleratorType>{}, int> = 0>
-void transferAllocatedToDevice(Dataset&, size_t, size_t, const std::vector<std::string>&)
-{
-}
-
-template<class Dataset, std::enable_if_t<not cstone::HaveGpu<typename Dataset::AcceleratorType>{}, int> = 0>
-void transferToHost(Dataset&, size_t, size_t, const std::vector<std::string>&)
-{
-}
-
-template<class Vector, class T, std::enable_if_t<not IsDeviceVector<Vector>{}, int> = 0>
-void fill(Vector& v, size_t first, size_t last, T value)
-{
-    std::fill(v.data() + first, v.data() + last, value);
-}
 
 } // namespace sphexa

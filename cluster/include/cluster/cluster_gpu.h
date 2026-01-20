@@ -1,0 +1,48 @@
+#pragma once
+/*!
+ * @brief  Public declarations for GPU FoF clustering (kernel + host launcher)
+ * @author Vincente Della Balda <vinc.dellabalda@gmail.com>
+ * 
+ * This header declares CUDA kernels for FoF clustering and the host-side
+ *
+ * The definitions live in cluster_gpu.cu.
+ */
+
+#include "cstone/sfc/box.hpp"     // Box is plain C++
+#include "cstone/tree/octree.hpp" // OctreeNsView is plain C++
+#include "cstone/traversal/groups.hpp"  // GroupView is plain C++
+
+#include "sph/particles_data.hpp"
+#include "sph/types.hpp"
+#include "cluster_data.hpp"
+
+namespace cluster
+{
+    /*
+     * @brief Host-side entry point to compute cluster IDs on the GPU.
+     */
+    template<class ParticleDataset, class ClusterDataset>
+    void computeLocalClusterIdGPU(
+                          const cstone::GroupView& grp,
+                          ParticleDataset& d,
+                          ClusterDataset& c,
+                          const cstone::Box<typename ParticleDataset::RealType>& box,
+                          const int myRank
+                        );
+    
+    template<class ParticleDataset, class ClusterDataset, class DomainType>
+    void computeGlobalClusterIdGPU(
+                          ParticleDataset& d,
+                          ClusterDataset& c,
+                          DomainType& domain,
+                          const int myRank
+                        );
+                        
+    template<class ClusterDataset, class DomainType>
+    void computeCompactClusterIdGPU(
+                          ClusterDataset& c,
+                          DomainType& domain,
+                          const int myRank,
+                          const int numRanks
+                        );
+}
