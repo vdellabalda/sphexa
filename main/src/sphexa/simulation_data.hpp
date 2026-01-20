@@ -35,6 +35,7 @@
 #include "cooling/chemistry_data.hpp"
 #include "sph/particles_data.hpp"
 #include "cluster/cluster_data.hpp"
+#include "cluster/halo_data.hpp"
 
 namespace sphexa
 {
@@ -50,6 +51,8 @@ public:
 
     using HydroData = ParticlesData<AccType>;
     using ChemData  = cooling::ChemistryData<RealType>;
+    using ClusterData = cluster::ClusterData<AccType>;
+    using HaloData = halo::HaloData<AccType>;
 
     //! @brief spacially distributed data for hydrodynamics and gravity
     HydroData hydro;
@@ -59,6 +62,9 @@ public:
 
      //! @brief cluster data for dark matter clustering
     ClusterData clust;
+
+    //! @brief halo data for dark matter halos
+    HaloData halo;
 
     //! @brief non-spacially distributed nuclear abundances
     // NuclearData nuclear;
@@ -71,6 +77,9 @@ public:
         hydro.setOutputFields(outFields);
         chem.setOutputFields(outFields);
         clust.setOutputFields(outFields);
+        halo.setOutputFields();
+
+         // check that all requested fields were found
 
         if (!outFields.empty())
         {
