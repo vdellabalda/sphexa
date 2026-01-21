@@ -164,15 +164,14 @@ public:
         );
         timer.step("compactClusterIds");
 
-        h.resize(c.getNumClusters());
         /*
+        h.resize(c.getNumClusters());
         
         reassignHalos(
             c,
             h
         );
-        */
-
+        
         computeHaloProperties(
             domain.startIndex(),
             domain.endIndex(),
@@ -181,6 +180,7 @@ public:
             h
         );
         timer.step("computeHaloProperties");
+        */
     }
 
     void saveFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData,
