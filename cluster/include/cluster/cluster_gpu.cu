@@ -632,7 +632,7 @@ __host__ void computeLocalClusterIdGPU(
     const cstone::Box<typename ParticleDataset::RealType>& box,
     const int myRank)
 {
-    auto [traversalPool, eidxPool] = cstone::allocateNcStacks(d.devData.traversalStack, d.ngmax);
+    auto [traversalPool, eidxPool] = cstone::allocateNcStacks(d.traversalStack, d.ngmax);
     unsigned egmax = (d.ngmax * GpuConfig::warpSize) / 2;
     cstone::resetEdgeTraversalCounters<<<1, 1>>>();
     checkGpuErrors(cudaGetLastError());
@@ -647,7 +647,7 @@ __host__ void computeLocalClusterIdGPU(
         egmax, box, percLength,
         grp.groupStart, grp.groupEnd, grp.numGroups,
         d.treeView,
-        rawPtr(d.devData.x), rawPtr(d.devData.y), rawPtr(d.devData.z),
+        rawPtr(d.x), rawPtr(d.y), rawPtr(d.z),
         rawPtr(c.devData.halo_id), rawPtr(c.devData.flagged),
         eidxPool, traversalPool, numParticlesHalos, grp.firstBody, grp.lastBody);
     checkGpuErrors(cudaGetLastError());
@@ -1191,6 +1191,23 @@ __host__ void computeCompactClusterIdGPU(
         domain.nParticles(),
         numUniqueKeys
     );
+    checkGpuErrors(cudaGetLastError());
+
+    // Remap non-local clusters to compact Ids
+    cstone::fillGpu(rawPtr(c.devData.idBuf), rawPtr(c.devData.idBuf)+numNonLocalKeys, ClusterIdType(1));
+    numBlocks = (numNonLocalKeys + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    directClusterRemapping<<numBlocks, numThreads>>>(
+        rawPtr(c.devData.nonLocalKeys),
+        rawPtr(c.devData.nonLocalKeys),
+        rawPtr(c.devData.thresholdMask),
+        rawPtr(c.devData.uniqueKeys), // already sorted
+        rawPtr(c.devData.idMap),      // corresponding compact IDs
+        numNonLocalKeys,
+        numUniqueKeys
+    );
+
+
 }
 template void computeCompactClusterIdGPU(
     cluster::ClusterData<cstone::GpuTag>& c,
