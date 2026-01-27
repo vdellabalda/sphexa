@@ -68,7 +68,7 @@ int main(int argc, char** argv)
     const std::string        clustChoice              = "dark";
 
     // Output parameters
-    std::string              outFile      = parser.get("-o", "cluster_" + removeModifiers(inputFile));
+    std::string              outFile      = parser.get("-o", removeModifiers(inputFile));
     const bool               ascii        = parser.exists("--ascii");
     const bool               quiet        = parser.exists("--quiet");
     const bool               avClean      = parser.exists("--avclean");
