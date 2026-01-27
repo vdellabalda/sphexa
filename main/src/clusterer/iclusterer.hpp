@@ -74,7 +74,7 @@ public:
     virtual ~Clusterer() = default;
 
 protected:
-    static void outputClusterFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData)
+    static void outputClusterFields(IFileWriter* writer, ParticleDataType& simData)
     {
         auto output = [](auto& d, IFileWriter* writer)
         {
@@ -112,7 +112,7 @@ protected:
             }
         };
 
-        output(first, last, simData.clust, writer);
+        output(simData.clust, writer);
     }
 
     std::ostream& out;
