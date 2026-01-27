@@ -165,7 +165,6 @@ public:
         timer.step("compactClusterIds");
     }
 
-    /*
     void computeHaloProperties(
         DomainType& domain,
         ParticleDataType& simData)
@@ -196,12 +195,11 @@ public:
         );
         timer.step("communicateHaloProperties");
     }
-    */
 
     void saveFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData,
                     const cstone::Box<T>& /*box*/) override
     {
-        Base::outputClusterFields(writer, first, last, simData);
+        Base::outputClusterFields(writer, simData);
         timer.step("FileOutput");
     }
 };
