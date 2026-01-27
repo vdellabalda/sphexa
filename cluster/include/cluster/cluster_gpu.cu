@@ -1197,7 +1197,7 @@ __host__ void computeCompactClusterIdGPU(
     cstone::fillGpu(rawPtr(c.devData.idBuf), rawPtr(c.devData.idBuf)+numNonLocalKeys, ClusterIdType(1));
     numBlocks = (numNonLocalKeys + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    directClusterRemapping<<numBlocks, numThreads>>>(
+    directClusterRemapping<<<numBlocks, numThreads>>>(
         rawPtr(c.devData.nonLocalKeys),
         rawPtr(c.devData.nonLocalKeys),
         rawPtr(c.devData.thresholdMask),
