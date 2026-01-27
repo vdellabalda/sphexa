@@ -76,7 +76,7 @@ public:
 protected:
     static void outputClusterFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData)
     {
-        auto output = [](size_t first, size_t last, auto& d, IFileWriter* writer)
+        auto output = [](auto& d, IFileWriter* writer)
         {
             auto fieldPointers = d.data();
             auto indicesDone   = d.outputFieldIndices;
@@ -89,10 +89,13 @@ protected:
                 {
                     int column = std::find(d.outputFieldIndices.begin(), d.outputFieldIndices.end(), fidx) -
                                  d.outputFieldIndices.begin();
-                    transferToHost(d, first, last, {d.fieldNames[fidx]});
-                    std::visit([writer, c = column, key = namesDone[i]](auto field)
-                               { writer->writeField(key, field->data(), c); },
-                               fieldPointers[fidx]);
+                    std::visit(
+                        [writer, c = column, key = namesDone[i]](auto field)
+                        {
+                            auto&& tmp = toHost(*field);
+                            writeField(writer, key, tmp.data(), c);
+                        },
+                        fieldPointers[fidx]);
                     indicesDone.erase(indicesDone.begin() + i);
                     namesDone.erase(namesDone.begin() + i);
                 }
