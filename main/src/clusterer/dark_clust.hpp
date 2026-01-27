@@ -163,25 +163,40 @@ public:
             this->numRanks_
         );
         timer.step("compactClusterIds");
+    }
 
-        /*
+    /*
+    void computeHaloProperties(
+        DomainType& domain,
+        ParticleDataType& simData)
+    {
+        timer.start();
+        auto& d = simData.hydro;
+        auto& c = simData.clust;
+        auto& h = simData.halo;
         h.resize(c.getNumClusters());
         
-        reassignHalos(
-            c,
-            h
-        );
+        assignHaloOwners(c, h);
+        timer.step("reassignHalos");
         
-        computeHaloProperties(
+        computeHaloPropertiesLocal(
             domain.startIndex(),
             domain.endIndex(),
             d,
             c,
             h
         );
-        timer.step("computeHaloProperties");
-        */
+        timer.step("computeHaloPropertiesLocal");
+
+        communicateHaloProperties(
+            domain,
+            h,
+            this->getRank(),
+            this->numRanks_
+        );
+        timer.step("communicateHaloProperties");
     }
+    */
 
     void saveFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData,
                     const cstone::Box<T>& /*box*/) override
