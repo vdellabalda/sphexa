@@ -25,8 +25,8 @@ namespace cstone
 template<class T>
 extern void fillGpu(T* first, T* last, T value);
 
-template<class T>
-extern void scaleGpu(T* first, T* last, T value);
+template<class T1, class T2, class T3>
+void scaleGpu(const T1* in1, const T1* in2, T2* out, T3 value);
 
 template<class T, class Tf>
 extern void multiplyElementWiseGpu(T* first, T* last, const Tf* factors);
