@@ -75,6 +75,7 @@ public:
     DevVector<IdType>           clusterParents;
     DevVector<unsigned>         clusterOwner;
     DevVector<ClusterKeyType>   nonLocalKeys;
+    DevVector<ClusterIdType>    nonLocalIds;
     DevVector<ClusterKeyType>   localKeys;
 
     // Number of local clusters

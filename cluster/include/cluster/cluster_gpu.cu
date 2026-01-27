@@ -1194,13 +1194,14 @@ __host__ void computeCompactClusterIdGPU(
     checkGpuErrors(cudaGetLastError());
 
     // Remap non-local clusters to compact Ids
+    c.devData.nonLocalIds.resize(numNonLocalKeys);
     cstone::fillGpu(rawPtr(c.devData.idBuf), rawPtr(c.devData.idBuf)+numNonLocalKeys, ClusterIdType(1));
     numBlocks = (numNonLocalKeys + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
     directClusterRemapping<<<numBlocks, numThreads>>>(
         rawPtr(c.devData.nonLocalKeys),
-        rawPtr(c.devData.nonLocalKeys),
-        rawPtr(c.devData.thresholdMask),
+        rawPtr(c.devData.nonLocalIds),
+        rawPtr(c.devData.idBuf),
         rawPtr(c.devData.uniqueKeys), // already sorted
         rawPtr(c.devData.idMap),      // corresponding compact IDs
         numNonLocalKeys,
