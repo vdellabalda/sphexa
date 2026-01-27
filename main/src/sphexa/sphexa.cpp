@@ -133,7 +133,6 @@ int main(int argc, char** argv)
     auto& d = simData.hydro;
     auto& c = simData.clust;
     auto& h = simData.halo;
-    migrateToDevice(d, 0, d.x.size());
 
     simData.setOutputFields(outputFields.empty() ? propagator->conservedFields() : outputFields);
 
@@ -164,7 +163,6 @@ int main(int argc, char** argv)
         clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
         clusterer->activateFields(simData);
         clusterer->setNumRanks(numRanks);
-        migrateToDevice(c, 0, c.halo_id.size());
         
         double simulationVolume = box.lx()*box.ly()*box.lz();
         double meanInterparticleSeparation = std::pow(simulationVolume/d.numParticlesGlobal, 1.0/3.0);

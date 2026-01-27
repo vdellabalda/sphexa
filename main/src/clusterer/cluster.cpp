@@ -121,9 +121,6 @@ int main(int argc, char** argv)
         std::cout << "Loaded " << d.numParticlesGlobal << " particles from " << inputFile << "\n";
     }
 
-    // Migrate data to device if using GPU
-    migrateToDevice(d, 0, d.x.size());
-
     // Set output fields
     if (outputFields.empty()) {
         outputFields = {"x", "y", "z", "halo_id"};
@@ -133,7 +130,6 @@ int main(int argc, char** argv)
     // Activate clustering fields
     clusterer->activateFields(simData);
     clusterer->setNumRanks(numRanks);
-    migrateToDevice(c, 0, c.halo_id.size());
 
     // Calculate percolation length
     double percolationLength;
