@@ -16,13 +16,13 @@ template size_t uniquify(EdgeType* input, size_t n);
 
 
 template<typename Tin, typename Tout>
-size_t runLengthEncode(Tin* input, unsigned n, Tin* unique, Tout* counts)
+size_t runLengthEncode(Tin* input, size_t n, Tin* unique, Tout* counts)
 {
     std::sort(input, input + n);
     size_t uniqueCount = 0;
     for (size_t i = 0; i < n; ++i)
     {
-        unsigned count = 1;
+        size_t count = 1;
         while (i < n && input[i] == input[i+1])
         {
             count++;
@@ -34,18 +34,18 @@ size_t runLengthEncode(Tin* input, unsigned n, Tin* unique, Tout* counts)
     }
     return uniqueCount;
 }
-template size_t runLengthEncode(ClusterKeyType* input, unsigned n, ClusterKeyType* unique, ClusterIdType* counts);
+template size_t runLengthEncode(ClusterKeyType* input, size_t n, ClusterKeyType* unique, ClusterIdType* counts);
 
 void assignClusterKey(
     ClusterIdType* clusterIdx,
     ClusterKeyType* clusterKeys,
     ClusterIdType* flagged,
-    unsigned n,
+    size_t n,
     int rank
 )
 {
     ClusterIdType clusterId;
-    for (unsigned i = 0; i < n; ++i)
+    for (size_t i = 0; i < n; ++i)
     {
         clusterId = clusterIdx[i];
         if (clusterId != 0)

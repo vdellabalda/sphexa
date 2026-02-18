@@ -224,6 +224,7 @@ public:
     FieldVector<HydroType> prho;                               // p / (kx * m^2 * gradh)
     FieldVector<HydroType> tdpdTrho;                           // temp * dp/dT * prho
     FieldVector<HydroType> h;                                  // Smoothing Length
+    FieldVector<HydroType> hStrict;                            // Smoothing length for subcluster detection
     FieldVector<Tmass>     m;                                  // Mass
     FieldVector<HydroType> c;                                  // Speed of sound
     FieldVector<HydroType> cv;                                 // Specific heat
@@ -243,6 +244,7 @@ public:
     FieldVector<HydroType> dV11, dV12, dV13, dV22, dV23, dV33; // Velocity gradient components
     FieldVector<uint8_t>   rung;                               // rung per particle of previous timestep
     FieldVector<uint64_t>  id;                                 // unique particle id
+    //FieldVector<uint32_t>  halo_id;                            // fof halo id, zero for non-halo particles
 
     //! @brief Indices of neighbors for each particle, length is number of assigned particles * ngmax. CPU version only.
     std::vector<cstone::LocalIndex>         neighbors;

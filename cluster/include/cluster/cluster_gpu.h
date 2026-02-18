@@ -15,6 +15,7 @@
 #include "sph/particles_data.hpp"
 #include "sph/types.hpp"
 #include "cluster_data.hpp"
+#include "halo_data.hpp"
 
 namespace cluster
 {
@@ -26,23 +27,53 @@ namespace cluster
                           const cstone::GroupView& grp,
                           ParticleDataset& d,
                           ClusterDataset& c,
-                          const cstone::Box<typename ParticleDataset::RealType>& box,
-                          const int myRank
+                          const cstone::Box<typename ParticleDataset::RealType>& box
                         );
     
     template<class ParticleDataset, class ClusterDataset, class DomainType>
     void computeGlobalClusterIdGPU(
                           ParticleDataset& d,
                           ClusterDataset& c,
-                          DomainType& domain,
-                          const int myRank
+                          DomainType& domain
                         );
                         
-    template<class ClusterDataset, class DomainType>
+    template<class ClusterDataset, class HaloDataset, class DomainType>
     void computeCompactClusterIdGPU(
                           ClusterDataset& c,
-                          DomainType& domain,
-                          const int myRank,
-                          const int numRanks
+                          HaloDataset& h,
+                          DomainType& domain
                         );
+
+    template<class ClusterDataset, class HaloDataset, class DomainType>
+    void prepareParticleClusterMapGPU(
+                          ClusterDataset& c,
+                          HaloDataset& h,
+                          DomainType& domain
+                        );
+
+    template<class ParticleDataset, class ClusterDataset>
+    size_t computeDensityMaxGPU(
+        const cstone::GroupView& grp,
+        ParticleDataset& d,
+        ClusterDataset& c,
+        const cstone::Box<typename ParticleDataset::RealType>& box);
+
+    template<class ParticleDataset, class ClusterDataset>
+    void computeDensityGroupsGPU(
+        const cstone::GroupView& grp,
+        ParticleDataset& d,
+        ClusterDataset& c,
+        const cstone::Box<typename ParticleDataset::RealType>& box);
+
+    template<class ParticleDataset, class ClusterDataset, class HaloDataset, class DomainType>
+    void growSOHalosGPU(
+        DomainType& domain,
+        ParticleDataset& d,
+        ClusterDataset& c,
+        HaloDataset& h,
+        const int myRank,
+        const int numRanks
+    );
+
+    
 }

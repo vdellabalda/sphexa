@@ -1,4 +1,3 @@
-
 function(enableH5hut exename)
     if(SPH_EXA_WITH_H5HUT)
         target_compile_definitions(${exename} PUBLIC SPH_EXA_HAVE_H5HUT)
@@ -14,7 +13,20 @@ function(enableH5hut exename)
     endif()
 endfunction()
 
-add_library(io id_tag_utils.cpp ifile_io_ascii.cpp ifile_io_hdf5.cpp arg_parser.cpp)
+function(enableHDF5 exename)
+    find_package(HDF5 REQUIRED COMPONENTS C)
+    if(HDF5_FOUND)
+        target_include_directories(${exename} PUBLIC ${HDF5_INCLUDE_DIRS})
+        target_link_libraries(${exename} PUBLIC ${HDF5_LIBRARIES})
+        target_compile_definitions(${exename} PUBLIC ${HDF5_DEFINITIONS})
+        
+        if(HDF5_IS_PARALLEL)
+            target_compile_definitions(${exename} PUBLIC HDF5_PARALLEL)
+        endif()
+    endif()
+endfunction()
+
+add_library(io id_tag_utils.cpp ifile_io_ascii.cpp ifile_io_hdf5.cpp cluster_hdf5_writer.cpp arg_parser.cpp)
 target_include_directories(io PRIVATE ${CSTONE_DIR} ${SPH_EXA_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_PATH})
 target_link_libraries(io PRIVATE ${MPI_CXX_LIBRARIES})
 
@@ -30,3 +42,4 @@ if (CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
 endif()
 
 enableH5hut(io)
+enableHDF5(io)

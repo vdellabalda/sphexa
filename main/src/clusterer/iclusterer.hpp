@@ -71,6 +71,13 @@ public:
 
     virtual void findClusters(DomainType& domain, ParticleDataType& d){};
 
+    virtual void findSubClusters(DomainType& domain, ParticleDataType& d){};
+
+    virtual void computeHaloProperties(DomainType& domain, ParticleDataType& d){};
+
+    //! @brief write all halo properties to HDF5 file (rank 0 only)
+    virtual void writeHaloProperties(const std::string& filename, ParticleDataType& d, IFileWriter* writer) {}
+
     virtual ~Clusterer() = default;
 
 protected:
@@ -111,8 +118,8 @@ protected:
                 std::cout << d.fieldNames[indicesDone.back()] << std::endl;
             }
         };
-
         output(simData.clust, writer);
+        output(simData.hydro, writer);
     }
 
     std::ostream& out;

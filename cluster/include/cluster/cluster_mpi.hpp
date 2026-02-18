@@ -136,17 +136,19 @@ void computeLocalClusterIdImpl(
      ParticleDataset& d,
      ClusterDataset& c,
      Box& box,
-     const int myRank,
      DomainType& domain
 )
-{
+{    
+     int myRank;
+     MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
      const auto* x = d.x.data();
      const auto* y = d.y.data();
      const auto* z = d.z.data();
 
-     std::fill(c.halo_id.data(), c.halo_id.data()+domain.nParticlesWithHalos(), unsigned(0));
+     std::fill(c.work_id.data(), c.work_id.data()+domain.nParticlesWithHalos(), ClusterIdType(0));
      std::fill(c.flagged.data(), c.flagged.data()+domain.nParticlesWithHalos(), unsigned(0));
-     std::fill(c.idBuf.data(), c.idBuf.data()+domain.nParticlesWithHalos(), unsigned(0));
+     std::fill(c.idBuf.data(), c.idBuf.data()+domain.nParticlesWithHalos(), ClusterIdType(0));
 
      auto percolationLength = c.getPercLength();
      auto percolationLengthSq = percolationLength * percolationLength;
@@ -156,9 +158,9 @@ void computeLocalClusterIdImpl(
      ClusterIdType currentClusterId = 0;
     
      for (size_t i = startIndex; i < endIndex; i++) {
-          if (c.halo_id[i]) continue;
+          if (c.work_id[i]) continue;
           currentClusterId += 1;
-          c.halo_id[i] = currentClusterId;
+          c.work_id[i] = currentClusterId;
           fofQueue.push(i);
           while (!(fofQueue.empty())) {
                currentSeed = fofQueue.front();
@@ -175,7 +177,7 @@ void computeLocalClusterIdImpl(
                          d.treeView,
                          box,
                          fofQueue,
-                         c.halo_id.data(),
+                         c.work_id.data(),
                          domain
                     );
           };
@@ -183,7 +185,7 @@ void computeLocalClusterIdImpl(
 
      // Assign global cluster keys
      assignClusterKey(
-          c.halo_id.data(),
+          c.work_id.data(),
           c.localClusterKeys.data(),
           c.flagged.data(),
           domain.nParticlesWithHalos(),
@@ -198,10 +200,13 @@ void computeLocalClusterIdImpl(
 template<class ClusterDataset, class DomainType>
 void computeGlobalClusterIdImpl(
      ClusterDataset& c,
-     DomainType& domain,
-     const int myRank
+     DomainType& domain
 )
 {
+     int myRank, numRanks;
+     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
+     MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
      LocalIndex nLocal = domain.nParticles();
      LocalIndex nHalo = domain.nParticlesWithHalos() - nLocal;
      LocalIndex nHaloStart = domain.startIndex();
@@ -257,8 +262,6 @@ void computeGlobalClusterIdImpl(
      size_t numUniqueEdges = uniquify(c.edges.data(), edgeIdx);
  
      // Allgather Edges
-     int numRanks;
-     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
      std::vector<int> recvCounts(numRanks);
      std::vector<int> displs(numRanks);
      int totalCount = allGathervSetup(
@@ -400,27 +403,29 @@ template<class ClusterDataset>
 void computeCompactClusterIdImpl(
      ClusterDataset& c,
      LocalIndex startIndex,
-     LocalIndex endIndex,
-     const int myRank,
-     const int numRanks
+     LocalIndex endIndex
 )
 {    
+     int myRank, numRanks;
+     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
+     MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
      LocalIndex nParticles = endIndex - startIndex;
 
      c.uniqueKeys.resize(nParticles);
-     c.keyCounts.resize(nParticles);
-     std::fill(c.keyCounts.begin(), c.keyCounts.end(), 0);
+     c.localKeyCounts.resize(nParticles);
+     std::fill(c.localKeyCounts.begin(), c.localKeyCounts.end(), 0);
      std::copy(c.localClusterKeys.data() + startIndex, c.localClusterKeys.data() + endIndex,
           c.keyBuf.data());
 
      size_t uniqueCount = runLengthEncode(c.keyBuf.data(), nParticles,
-          c.uniqueKeys.data(), c.keyCounts.data());
+          c.uniqueKeys.data(), c.localKeyCounts.data());
 
      // Keys which appear less than cluster threshold times do not need to be communicated
      // unless they are part of a non-local cluster
      int keyCount = 0;
      c.uniqueKeys.resize(uniqueCount);
-     c.keyCounts.resize(uniqueCount);
+     c.localKeyCounts.resize(uniqueCount);
      std::unordered_set<ClusterKeyType> nonLocalKeySet(
           c.nonLocalKeys.data(),
           c.nonLocalKeys.data() + c.nonLocalKeys.size()
@@ -428,7 +433,7 @@ void computeCompactClusterIdImpl(
      std::map<ClusterKeyType, ClusterKeyType> keyToGlobalId;
      for (int i = 0; i < uniqueCount; ++i)
      {
-          if ((c.keyCounts[i] < c.getClusterThreshold()) && nonLocalKeySet.find(c.uniqueKeys[i]) == nonLocalKeySet.end())
+          if ((c.localKeyCounts[i] < c.getClusterThreshold()) && nonLocalKeySet.find(c.uniqueKeys[i]) == nonLocalKeySet.end())
                { 
                     keyToGlobalId[c.uniqueKeys[i]] = 0;
                }
@@ -458,7 +463,7 @@ void computeCompactClusterIdImpl(
           c.localClusterKeys[i] = keyToGlobalId[c.localClusterKeys[i]];          
      }
      // Remove clusters below threshold
-     c.numClustersGlobal = removeSmallClusters(c.localClusterKeys.data(), c.halo_id.data(), nUniqueKeys,
+     c.numClustersGlobal = removeSmallClusters(c.localClusterKeys.data(), c.work_id.data(), nUniqueKeys,
           c.getClusterThreshold(), startIndex, endIndex);
 }
 } // namespace cluster

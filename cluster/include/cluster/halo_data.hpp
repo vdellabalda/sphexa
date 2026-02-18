@@ -5,6 +5,7 @@
 
 #pragma once
 #include <array>
+#include <iostream>
 #include <vector>
 #include <variant>
 
@@ -17,13 +18,8 @@
 #include "cstone/util/reallocate.hpp"
 
 #include "definitions.h"
-#include "halo_data_stubs.hpp"
 
-#if defined(USE_CUDA)
-#include "halo_data_gpu.cuh"
-#endif
-
-namespace halo
+namespace cluster
 {
 
 template<class AccType>
@@ -33,22 +29,22 @@ public:
     using AcceleratorType = AccType;
 
     using RealType  = sph::SphTypes::CoordinateType;
-    using IdType         = unsigned;
+    using IdType         = uint32_t;
     using HydroType = sph::SphTypes::HydroType;
     using Tmass     = sph::SphTypes::Tmass;
 
     template<class ValueType>
-    using PinnedVec = std::vector<ValueType, PinnedAlloc_t<AcceleratorType, ValueType>>;
-
-    template<class ValueType>
-    using FieldVector = std::vector<ValueType, std::allocator<ValueType>>;
+    using FieldVector =
+        std::conditional_t<cstone::HaveGpu<AccType>{}, cstone::DeviceVector<ValueType>, std::vector<ValueType>>;
 
     using FieldVariant = std::variant<FieldVector<float>*, FieldVector<double>*, FieldVector<unsigned>*,
                                       FieldVector<uint64_t>*, FieldVector<uint8_t>*>;
 
     uint64_t iteration{1};
-    uint64_t numHalosLocal{0};
-    uint64_t numHalosGlobal{0};
+    uint32_t numClustersLocal{0};
+    uint32_t numClustersGlobal{1};
+    size_t nClusteredLocal{0};
+    size_t nClusteredGlobal{0};
     IdType   clusterThreshold{32};
 
     RealType percolationLength{0.0};
@@ -56,38 +52,37 @@ public:
 
     /*! @brief Halo fields
      *
-     * The length of these arrays equals the local number of halos
+     * The length of these arrays equals the global number of halos
      * if the field is active and is zero if the field is inactive.
      */
-
-    FieldVector<IdType>             globalId;
-    FieldVector<IdType>             localId;
+    FieldVector<IdType>             id;
     FieldVector<Tmass>              mass;
-    FieldVector<Tmass>              centerX;
-    FieldVector<Tmass>              centerY;
-    FieldVector<Tmass>              centerZ;
-    FieldVector<HydroType>          velocityX;
-    FieldVector<HydroType>          velocityY;
-    FieldVector<HydroType>          velocityZ;
-    FieldVector<IdType>             sizes;
-    FieldVector<IdType>             ownership; // rank owning the halo
-
-    FieldVector<util::array<unsigned, 2>> keyOwnerPair;
-
-    DeviceHaloData_t<AccType> devData;
+    FieldVector<Tmass>              xCenter;
+    FieldVector<Tmass>              yCenter;
+    FieldVector<Tmass>              zCenter;
+    FieldVector<HydroType>          xVelocity;
+    FieldVector<HydroType>          yVelocity;
+    FieldVector<HydroType>          zVelocity;
+    FieldVector<uint32_t>           localSize;
+    FieldVector<uint64_t>           globalSize;
+    FieldVector<uint32_t>           localOffset;
+    FieldVector<uint64_t>           globalOffset;
+    
+    // Number of local clusters
+    FieldVector<IdType>             numHalos;
+    
+    // Gather map from full particle set to sorted and grouped halo particle set
+    FieldVector<IdType>             particleToHaloMap;
 
     /*! @brief
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
     inline static constexpr std::array fieldNames{
-        "globalId", "localId", "mass", "centerX", "centerY", "centerZ",
-        "velocityX", "velocityY", "velocityZ", "sizes", "ownership"};
+        "id", "globalSize", "mass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity",
+        "localSize", "localOffset", "globalOffset"};
     
     //! @brief dataset prefix to be prepended to fieldNames for structured output
     static const inline std::string prefix{};
-
-    static_assert(!cstone::HaveGpu<AcceleratorType>{} || fieldNames.size() == DeviceHaloData_t<AccType>::fieldNames.size(),
-                  "HaloData on CPU and GPU must have the same fields");
 
     /*! @brief return a tuple of field references
      *
@@ -95,8 +90,10 @@ public:
      */
     auto dataTuple()
     {
-        auto ret = std::tie(globalId, localId, mass, centerX, centerY, centerZ,
-                            velocityX, velocityY, velocityZ, sizes, ownership);
+        auto ret = std::tie(
+            id, globalSize, mass, xCenter, yCenter, zCenter, xVelocity, yVelocity, zVelocity,
+            localSize, localOffset, globalOffset
+        );
 
 #if defined(__clang__) || __GNUC__ > 11
         static_assert(std::tuple_size_v<decltype(ret)> == fieldNames.size());
@@ -122,14 +119,16 @@ public:
      * Selected fields that match existing names contained in @a fieldNames will be removed from the argument
      * @p field names.
      */
-    void setOutputFields()
+    void setOutputFields(std::vector<std::string>& outFields)
     {
         auto hasField = [](const std::string& field)
         { return cstone::getFieldIndex(field, fieldNames) < fieldNames.size(); };
 
-        std::copy_if(fieldNames.begin(), fieldNames.end(), std::back_inserter(outputFieldNames), hasField);
+        std::copy_if(outFields.begin(), outFields.end(), std::back_inserter(outputFieldNames), hasField);
         outputFieldIndices = cstone::fieldStringsToInt(outputFieldNames, fieldNames);
         std::for_each(outputFieldNames.begin(), outputFieldNames.end(), [](auto& f) { f = prefix + f; });
+
+        outFields.erase(std::remove_if(outFields.begin(), outFields.end(), hasField), outFields.end());
     }
 
 
@@ -139,8 +138,8 @@ public:
 
         auto deallocateVector = [size](auto* devVectorPtr)
         {
-            using DevVector = std::decay_t<decltype(*devVectorPtr)>;
-            if (devVectorPtr->capacity() < size) { *devVectorPtr = DevVector{}; }
+            using VecType = std::decay_t<decltype(*devVectorPtr)>;
+            if (devVectorPtr->capacity() < size) { *devVectorPtr = VecType{}; }
         };
 
         for (size_t i = 0; i < data_.size(); ++i)
@@ -155,8 +154,6 @@ public:
                 std::visit([size, gr = allocGrowthRate_](auto* arg) { reallocate(*arg, size, gr); }, data_[i]);
             }
         }
-
-        devData.resize(size, allocGrowthRate_);
     }
 
     size_t size()
@@ -172,20 +169,6 @@ public:
         return 0;
     }
 
-    //! @brief resize GPU arrays if in use, CPU arrays otherwise
-    void resizeAcc(size_t size)
-    {
-        if (cstone::HaveGpu<AccType>{}) { devData.resize(size, allocGrowthRate_); }
-        else { resize(size); }
-    }
-
-    //! @brief return the size of GPU arrays if in use, CPU arrays otherwise
-    size_t accSize()
-    {
-        if (cstone::HaveGpu<AccType>{}) { return devData.size(); }
-        else { return size(); }
-    }
-
     //! @brief halo fields selected for file output
     std::vector<int>         outputFieldIndices;
     std::vector<std::string> outputFieldNames;
@@ -193,8 +176,8 @@ public:
     float getAllocGrowthRate() const { return allocGrowthRate_; }
     RealType getPercLength() const { return percolationLength; }
     IdType getClusterThreshold() const {return clusterThreshold; }
-    uint64_t getNumHalosGlobal() const { return numHalosGlobal; }
-    uint64_t getNumHalosLocal() const { return numHalosLocal; }
+    uint32_t getNumClustersGlobal() const { return numClustersGlobal; }
+    uint32_t getNumClustersLocal() const { return numClustersLocal; }
 
 private:
 

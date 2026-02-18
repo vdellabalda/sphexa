@@ -28,6 +28,12 @@ extern void fillGpu(T* first, T* last, T value);
 template<class T1, class T2, class T3>
 void scaleGpu(const T1* in1, const T1* in2, T2* out, T3 value);
 
+template<class T1>
+extern void addGpu(T1* in1, const T1* in2, size_t numElements);
+
+template<class T1>
+extern void subtractGpu(T1* in1, const T1* in2, size_t numElements);
+
 template<class T, class Tf>
 extern void multiplyElementWiseGpu(T* first, T* last, const Tf* factors);
 
@@ -58,6 +64,9 @@ extern size_t lowerBoundGpu(const T* first, const T* last, T value);
 
 template<class T, class IndexType>
 extern void lowerBoundGpu(const T* first, const T* last, const T* valueFirst, const T* valueLast, IndexType* result);
+
+template<class T>
+extern size_t upperBoundReverseGpu(const T* first, const T* last, T value);
 
 template<class T1, class T2, class Tout>
 extern void sequenceMax(const T1* i1_begin, const T1* i1_end, const T2* i2, Tout* output);
@@ -115,8 +124,8 @@ void exclusiveScanGpu(const IndexType* first, const IndexType* last, SumType* ou
     exclusiveScanGpu(first, last, output, SumType(0));
 }
 
-template<class ValueType>
-extern size_t countGpu(const ValueType* first, const ValueType* last, ValueType v);
+template<class ValueType, class OutputType>
+extern size_t countGpu(const ValueType* first, const ValueType* last, OutputType v);
 
 template<class TS, class TD, class S>
 extern void selectCopyGpu(const TS* src, LocalIndex n, const S* selectFlags, TD* dest);
@@ -132,6 +141,9 @@ extern size_t uniqueCountGpu(const IndexType* first, const IndexType* last);
 
 template<class KeyType, class IndexType>
 extern void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in, KeyType* d_unique_out, IndexType* d_counts_out,
-    IndexType* d_num_runs_out);
+    IndexType* d_num_runs_out, void* d_temp_storage, size_t tempStorageBytes);
+
+template<class ValueType, class FlagType>
+extern void copyIfGpu(const ValueType* src, size_t n, const FlagType* flags, ValueType* dest);
 
 } // namespace cstone

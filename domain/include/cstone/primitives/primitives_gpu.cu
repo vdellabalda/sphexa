@@ -70,6 +70,25 @@ template void scaleGpu(const double*, const double*, double*, double);
 template void scaleGpu(const float*, const float*, float*, double);
 template void scaleGpu(const float*, const float*, float*, float);
 
+template<class T1>
+void addGpu(T1* in1, const T1* in2, size_t numElements)
+{
+    thrust::transform(thrust::device, in1, in1 + numElements, in2, in1, thrust::plus<T1>{});
+}
+template void addGpu(unsigned*, const unsigned*, size_t);
+template void addGpu(uint64_t*, const uint64_t*, size_t);
+template void addGpu(double*, const double*, size_t);
+
+template<class T1>
+void subtractGpu(T1* in1, const T1* in2, size_t numElements)
+{
+    thrust::transform(thrust::device, in1, in1 + numElements, in2, in1, thrust::minus<T1>{});
+}
+template void subtractGpu(double*, const double*, size_t);
+template void subtractGpu(float*, const float*, size_t);
+template void subtractGpu(int*, const int*, size_t);
+template void subtractGpu(unsigned*, const unsigned*, size_t);
+
 template<class T, class Tf>
 void multiplyElementWiseGpu(T* first, T* last, const Tf* factors)
 {
@@ -142,6 +161,7 @@ void scatterGpu(const IndexType* map, size_t n, const T* source, T* destination)
     scatterGpuKernel<<<numBlocks, numThreads>>>(map, n, source, destination);
 }
 
+template void scatterGpu(const unsigned*, size_t, const uint32_t*, uint32_t*);
 template void scatterGpu(const int*, size_t, const int*, int*);
 template void scatterGpu(const int*, size_t, const uint32_t*, uint32_t*);
 template void scatterGpu(const int*, size_t, const uint64_t*, uint64_t*);
@@ -246,6 +266,14 @@ template void lowerBoundGpu(const uint64_t*, const uint64_t*, const uint64_t*, c
 template void lowerBoundGpu(const unsigned*, const unsigned*, const unsigned*, const unsigned*, uint64_t*);
 template void lowerBoundGpu(const uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*, uint64_t*);
 
+template<class T>
+size_t upperBoundReverseGpu(const T* first, const T* last, T value)
+{
+    return thrust::upper_bound(thrust::device, first, last, value, thrust::greater<T>{}) - first;
+}
+template size_t upperBoundReverseGpu(const unsigned*, const unsigned*, unsigned);
+template size_t upperBoundReverseGpu(const uint64_t*, const uint64_t*, uint64_t);
+
 template<class T1, class T2, class Tout>
 void sequenceMax(const T1* i1_begin, const T1* i1_end, const T2* i2, Tout* output)
 {
@@ -279,11 +307,16 @@ std::pair<KeyType*, Tout*> reduceByKeyGpu(
         valuesOut);
     return std::pair(new_end.first, new_end.second);
 }
-
 template std::pair<long unsigned*, unsigned*> reduceByKeyGpu(
     const long unsigned*, const long unsigned*,
     const unsigned*,
     long unsigned*,
+    unsigned*
+);
+template std::pair<unsigned*, unsigned*> reduceByKeyGpu(
+    const unsigned*, const unsigned*,
+    const unsigned*,
+    unsigned*,
     unsigned*
 );
 
@@ -336,6 +369,7 @@ void sortGpu(EdgeType* first, EdgeType* last)
 template void sortGpu(util::array<uint32_t, 2>*, util::array<uint32_t, 2>*);
 template void sortGpu(util::array<uint64_t, 2>*, util::array<uint64_t, 2>*);
 template void sortGpu(uint64_t*, uint64_t*);
+template void sortGpu(uint32_t*, uint32_t*);
 
 // Determine temporary device storage requirements
 template<class KeyType, class ValueType>
@@ -405,6 +439,7 @@ template void sortByKeyGpu(unsigned*, unsigned*, uint64_t*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, unsigned*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, int*);
 template void sortByKeyGpu(uint64_t*, uint64_t*, uint64_t*);
+template void sortByKeyGpu(int*, int*, unsigned*);
 
 template<class KeyType, class ValueType>
 void sortByKeyDescendGpu(KeyType* first, KeyType* last, ValueType* values)
@@ -425,6 +460,7 @@ template void exclusiveScanGpu(const int*, const int*, unsigned*, unsigned);
 template void exclusiveScanGpu(const int*, const int*, uint64_t*, uint64_t);
 template void exclusiveScanGpu(const unsigned*, const unsigned*, unsigned*, unsigned);
 template void exclusiveScanGpu(const unsigned*, const unsigned*, uint64_t*, uint64_t);
+template void exclusiveScanGpu(const uint64_t*, const uint64_t*, uint64_t*, uint64_t);
 
 template<class IndexType, class SumType>
 void inclusiveScanGpu(const IndexType* first, const IndexType* last, SumType* output)
@@ -460,8 +496,8 @@ template void inclusiveScanGpu(const int*, const int*, unsigned*);
 template void inclusiveScanGpu(const unsigned*, const unsigned*, unsigned*);
 // template void inclusiveScanGpu(const unsigned*, const unsigned*, uint64_t*);
 
-template<class ValueType>
-size_t countGpu(const ValueType* first, const ValueType* last, ValueType v)
+template<class ValueType, class OutputType>
+size_t countGpu(const ValueType* first, const ValueType* last, OutputType v)
 {
     return thrust::count(thrust::device, first, last, v);
 }
@@ -469,6 +505,7 @@ size_t countGpu(const ValueType* first, const ValueType* last, ValueType v)
 template size_t countGpu(const int* first, const int* last, int v);
 template size_t countGpu(const unsigned* first, const unsigned* last, unsigned v);
 template size_t countGpu(const uint64_t* first, const uint64_t* last, uint64_t v);
+template size_t countGpu(const unsigned int* first, const unsigned int* last, size_t v);
 
 template<class TS, class TD, class S>
 __global__ void selectCopyKernel(const TS* src, LocalIndex n, const S* selectFlags, TD* dest)
@@ -530,31 +567,37 @@ size_t uniqueCountGpu(const IndexType* first, const IndexType* last)
 template size_t uniqueCountGpu(const unsigned*, const unsigned*);
 template size_t uniqueCountGpu(const unsigned long*, const unsigned long*);
 
+
 template<class KeyType, class IndexType>
 void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in,
-    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out)
+    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out,
+    void* d_temp_storage, size_t tempStorageBytes)
 {
     // Determine temporary device storage requirements
-    void     *d_temp_storage = nullptr;
     size_t   temp_storage_bytes = 0;
     checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
-        d_temp_storage, temp_storage_bytes,
+        nullptr, temp_storage_bytes,
         d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
-
-    // Allocate temporary storage
-    checkGpuErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+    
+    if (tempStorageBytes < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
     
     // Run encoding 
     checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
         d_temp_storage, temp_storage_bytes,
         d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
-
-    checkGpuErrors(cudaFree(d_temp_storage));
 }
 
 template void runLengthEncodeGpu(const unsigned long, const unsigned*,
-    unsigned*, unsigned*, unsigned*);
+    unsigned*, unsigned*, unsigned*, void*, size_t);
 template void runLengthEncodeGpu(const unsigned long, const uint64_t*,
-    uint64_t*, unsigned*, unsigned*);
+    uint64_t*, unsigned*, unsigned*, void*, size_t);
+
+template<class ValueType, class FlagType>
+void copyIfGpu(const ValueType* src, size_t n, const FlagType* flags, ValueType* dest)
+{
+    thrust::copy_if(thrust::device, src, src + n, flags, dest, thrust::identity<FlagType>{});
+}
+template void copyIfGpu(const unsigned*, size_t, const unsigned*, unsigned*);
+
 
 } // namespace cstone

@@ -1,9 +1,9 @@
 #include "halo_gpu.h"
 
-namespace halo
+namespace cluster
 {
 template<class ParticleDataset, class ClusterDataset, class HaloDataset>
-void computeHaloProperties(
+void computeHaloPropertiesLocal(
     size_t first,
     size_t last,
     ParticleDataset& d,
@@ -12,6 +12,17 @@ void computeHaloProperties(
 {
     if constexpr (cstone::HaveGpu<typename ParticleDataset::AcceleratorType>{})
         { haloPropertiesGPU(first, last, d, c, h); }
-    else { }
+    else { printf("Error: No CPU implementation of halo properties computation available\n"); }
+}
+
+template<class HaloDataset>
+void communicateHaloProperties(
+    size_t first,
+    size_t last,
+    HaloDataset& h)
+{
+    if constexpr (cstone::HaveGpu<typename HaloDataset::AcceleratorType>{})
+        { communicateHaloPropertiesGPU(first, last, h); }
+    else { printf("Error: No CPU implementation of halo properties communication available\n"); }
 }
 }

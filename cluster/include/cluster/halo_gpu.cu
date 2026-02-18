@@ -5,11 +5,12 @@
 #include "cstone/cuda/annotation.hpp"
 #include "cstone/cuda/cuda_utils.cuh"
 #include "cstone/primitives/primitives_gpu.h"
+#include "cstone/primitives/mpi_wrappers.hpp"
 
 #include "halo_gpu.h"
 #include "definitions.h"
 
-namespace halo
+namespace cluster
 {
 
 // Overload for double (your custom implementation)
@@ -123,7 +124,7 @@ void reassignHalosGPU(
 
 template<class Tc, class Tm, class T>
 HOST_DEVICE_FUN void centerOfMass(
-    unsigned idx,
+    uint32_t idx,
     const Tc* x,
     const Tc* y,
     const Tc* z,
@@ -134,8 +135,9 @@ HOST_DEVICE_FUN void centerOfMass(
     Tc* haloCenterZ,
     Tm* haloMass)
 {
-    unsigned haloId = haloIds[idx];
+    uint32_t haloId = haloIds[idx];
     if (haloId == 0) return;
+    haloId -= 1; // Adjust halo ID to be 0-indexed for array access
     Tm m = mass[idx];
     atomicAdd(&haloCenterX[haloId], x[idx] * m);
     atomicAdd(&haloCenterY[haloId], y[idx] * m);
@@ -145,7 +147,7 @@ HOST_DEVICE_FUN void centerOfMass(
 
 template<class Tc, class Tm, class T>
 HOST_DEVICE_FUN void haloVelocity(
-    unsigned idx,
+    uint32_t idx,
     const Tc* vx,
     const Tc* vy,
     const Tc* vz,
@@ -155,8 +157,9 @@ HOST_DEVICE_FUN void haloVelocity(
     Tc* haloVelocityY,
     Tc* haloVelocityZ)
 {
-    unsigned haloId = haloIds[idx];
+    uint32_t haloId = haloIds[idx];
     if (haloId == 0) return;
+    haloId -= 1; // Adjust halo ID to be 0-indexed for array access
     Tm m = mass[idx];
     atomicAdd(&haloVelocityX[haloId], vx[idx] * m);
     atomicAdd(&haloVelocityY[haloId], vy[idx] * m);
@@ -187,8 +190,9 @@ __global__ void haloPropertiesKernel(
     unsigned idx = first + blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= last) return;
 
-    unsigned haloId = haloIds[idx];
+    uint32_t haloId = haloIds[idx];
     if (haloId == 0) return;
+    haloId -= 1; // Adjust halo ID to be 0-indexed for array access
     Tm m = mass[idx];
 
     atomicAddCustom(&haloCenterX[haloId], x[idx] * m);
@@ -206,14 +210,14 @@ __global__ void haloPropertiesKernel(
                                        Tm* haloCenterX, Tm* haloCenterY, Tm* haloCenterZ,                            \
                                        Tv* haloVelocityX, Tv* haloVelocityY, Tv* haloVelocityZ, Tm* haloMass)
 
-COMPUTE_HALO_PROPS(double, double, double, unsigned);
-COMPUTE_HALO_PROPS(double, double, float, unsigned);
-COMPUTE_HALO_PROPS(double, float, double, unsigned);
-COMPUTE_HALO_PROPS(float, double, double, unsigned);
-COMPUTE_HALO_PROPS(double, float, float, unsigned);
-COMPUTE_HALO_PROPS(float, double, float, unsigned);
-COMPUTE_HALO_PROPS(float, float, double, unsigned);
-COMPUTE_HALO_PROPS(float, float, float, unsigned);
+COMPUTE_HALO_PROPS(double, double, double, uint32_t);
+COMPUTE_HALO_PROPS(double, double, float, uint32_t);
+COMPUTE_HALO_PROPS(double, float, double, uint32_t);
+COMPUTE_HALO_PROPS(float, double, double, uint32_t);
+COMPUTE_HALO_PROPS(double, float, float, uint32_t);
+COMPUTE_HALO_PROPS(float, double, float, uint32_t);
+COMPUTE_HALO_PROPS(float, float, double, uint32_t);
+COMPUTE_HALO_PROPS(float, float, float, uint32_t);
 
 template<class ParticleDataset, class ClusterDataset, class HaloDataset>
 void haloPropertiesGPU(
@@ -224,6 +228,17 @@ void haloPropertiesGPU(
     HaloDataset& h
 )
 {
+    // First initialize halo properties to zero
+    size_t numClusters = c.numClustersGlobal;
+    if (numClusters == 0) return;
+    cstone::fillGpu(rawPtr(h.xCenter), rawPtr(h.xCenter)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.yCenter), rawPtr(h.yCenter)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.zCenter), rawPtr(h.zCenter)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.xVelocity), rawPtr(h.xVelocity)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.yVelocity), rawPtr(h.yVelocity)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.zVelocity), rawPtr(h.zVelocity)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.mass), rawPtr(h.mass)+numClusters, float(0.0));
+
     unsigned numThreads = 256;
     unsigned numBlocks = (last - first + numThreads - 1) / numThreads;
     haloPropertiesKernel<<<numBlocks, numThreads>>>(
@@ -236,14 +251,14 @@ void haloPropertiesGPU(
         rawPtr(d.vy),
         rawPtr(d.vz),
         rawPtr(d.m),
-        rawPtr(c.devData.halo_id),
-        rawPtr(h.devData.centerX),
-        rawPtr(h.devData.centerY),
-        rawPtr(h.devData.centerZ),
-        rawPtr(h.devData.velocityX),
-        rawPtr(h.devData.velocityY),
-        rawPtr(h.devData.velocityZ),
-        rawPtr(h.devData.mass)
+        rawPtr(c.halo_id),
+        rawPtr(h.xCenter),
+        rawPtr(h.yCenter),
+        rawPtr(h.zCenter),
+        rawPtr(h.xVelocity),
+        rawPtr(h.yVelocity),
+        rawPtr(h.zVelocity),
+        rawPtr(h.mass)
     );
 }
 template void haloPropertiesGPU(
@@ -251,6 +266,88 @@ template void haloPropertiesGPU(
     size_t last,
     sphexa::ParticlesData<cstone::GpuTag>& d,
     cluster::ClusterData<cstone::GpuTag>& c,
-    halo::HaloData<cstone::GpuTag>& h
+    cluster::HaloData<cstone::GpuTag>& h
 );
-} // namespace halo
+
+// Kernel to normalize center coordinates and velocities by mass
+template<class Tc, class Tv, class Tm>
+__global__ void normalizeByMassKernel(
+    Tc* centerX, Tc* centerY, Tc* centerZ,
+    Tv* velocityX, Tv* velocityY, Tv* velocityZ,
+    Tm* mass, size_t numClusters)
+{
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x; 
+    if (idx >= numClusters) return;
+    
+    Tm haloMass = mass[idx];
+    if (haloMass > 0) {
+        centerX[idx] /= haloMass;
+        centerY[idx] /= haloMass;
+        centerZ[idx] /= haloMass;
+        velocityX[idx] /= haloMass;
+        velocityY[idx] /= haloMass; 
+        velocityZ[idx] /= haloMass;
+    }
+}
+#define NORMALIZE_BY_MASS_KERNEL(Tc, Tv, Tm)                                                                     \
+    template __global__ void normalizeByMassKernel(Tc* centerX, Tc* centerY, Tc* centerZ,                  \
+                                                   Tv* velocityX, Tv* velocityY, Tv* velocityZ,             \
+                                                   Tm* mass, size_t numClusters)
+
+NORMALIZE_BY_MASS_KERNEL(double, double, double);
+NORMALIZE_BY_MASS_KERNEL(float, float, float);
+NORMALIZE_BY_MASS_KERNEL(double, float, float);
+NORMALIZE_BY_MASS_KERNEL(float, double, double);
+NORMALIZE_BY_MASS_KERNEL(double, double, float);
+NORMALIZE_BY_MASS_KERNEL(float, float, double);
+
+
+template<class T>
+void reduceHaloPropertiesGPU(
+    T* properties,
+    size_t numClusters
+)
+{
+    std::vector<T> propertiesHost(numClusters);
+    memcpyD2H(properties, numClusters, propertiesHost.data());
+    MPI_Allreduce(MPI_IN_PLACE, propertiesHost.data(), numClusters, MpiType<T>{}, MPI_SUM, MPI_COMM_WORLD);
+    memcpyH2D(propertiesHost.data(), numClusters, properties);
+    return;
+}
+template void reduceHaloPropertiesGPU(double* properties, size_t numClusters);
+template void reduceHaloPropertiesGPU(float* properties, size_t numClusters);
+
+template<class HaloDataset>
+void communicateHaloPropertiesGPU(
+    size_t first,
+    size_t last,
+    HaloDataset& h
+)
+{   
+    // Get the number of halos
+    size_t numClusters = h.numClustersGlobal;
+    if (numClusters == 0) return;
+    
+    // Reduce all halo properties across processors
+    reduceHaloPropertiesGPU(rawPtr(h.xCenter), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.yCenter), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.zCenter), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.xVelocity), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.yVelocity), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.zVelocity), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.mass), numClusters);
+    
+    // Launch kernel to normalize center coordinates by mass to get center of mass
+    // and normalize velocities by mass to get mass-weighted velocities
+    unsigned numThreads = 256;
+    unsigned numBlocks = (numClusters + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1; // Ensure at least one block is launched
+    normalizeByMassKernel<<<numBlocks, numThreads>>>(
+            rawPtr(h.xCenter), rawPtr(h.yCenter), rawPtr(h.zCenter),
+            rawPtr(h.xVelocity), rawPtr(h.yVelocity), rawPtr(h.zVelocity),
+            rawPtr(h.mass), numClusters
+    );    
+}
+template void communicateHaloPropertiesGPU(size_t first, size_t last, cluster::HaloData<cstone::GpuTag>& h);
+
+} // namespace cluster

@@ -1,7 +1,7 @@
 find_package(MPI)
 
 if (CMAKE_CUDA_COMPILER OR CMAKE_HIP_COMPILER)
-    add_library(cluster_gpu OBJECT cluster_gpu.cu halo_gpu.cu)
+    add_library(cluster_gpu OBJECT cluster_gpu.cu halo_gpu.cu densmax_gpu.cu)
     target_include_directories(cluster_gpu PRIVATE ${CSTONE_DIR} ${SPH_DIR} ${MPI_CXX_INCLUDE_PATH})
     if (CMAKE_CUDA_COMPILER)
         target_link_libraries(cluster_gpu PRIVATE CUDA::cudart ${MPI_CXX_LIBRARIES})

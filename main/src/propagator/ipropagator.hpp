@@ -170,6 +170,7 @@ protected:
 
         output(simData.hydro, writer);
         output(simData.chem, writer);
+        output(simData.clust, writer);
     }
 
     void logDomainStats(const DomainType& domain, ParticleDataType& simData)

@@ -14,9 +14,9 @@ struct GpuHashMap {
     
     KeyType* keys;          //!< Array of keys
     ValueType* values;      //!< Array of values
-    unsigned capacity;      //!< Hash table capacity (power of 2)
-    unsigned mask;          //!< Bitmask for fast modulo (capacity - 1)
-    unsigned size;          //!< Current number of elements
+    size_t capacity;      //!< Hash table capacity (power of 2)
+    size_t mask;          //!< Bitmask for fast modulo (capacity - 1)
+    size_t size;          //!< Current number of elements
     
     __host__ __device__ GpuHashMap() : keys(nullptr), values(nullptr), capacity(0), mask(0), size(0) {}
     
@@ -332,8 +332,8 @@ public:
     void printStatistics() const {
         if (initialized) {
             printf("Hash Map Statistics:\n");
-            printf("  Capacity: %u\n", hashMap.capacity);
-            printf("  Size: %u\n", hashMap.size);
+            printf("  Capacity: %lu\n", hashMap.capacity);
+            printf("  Size: %lu\n", hashMap.size);
             printf("  Load Factor: %.2f\n", (double)hashMap.size / hashMap.capacity);
         }
     }
@@ -342,8 +342,8 @@ public:
     bool isInitialized() const { return initialized; }
 };
 
-template class ClusterKeyHashMapManager<uint64_t, unsigned>;
-template class ClusterKeyHashMapManager<unsigned, unsigned>;
+template class ClusterKeyHashMapManager<uint64_t, uint32_t>;
+template class ClusterKeyHashMapManager<uint32_t, uint32_t>;
 template class ClusterKeyHashMapManager<unsigned long long, unsigned>;
 
 }

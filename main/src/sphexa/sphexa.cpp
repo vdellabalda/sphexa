@@ -161,6 +161,7 @@ int main(int argc, char** argv)
     if (findClusters)
     {   
         clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
+        clusterer->addCounters(pmroot, getNumLocalRanks(numRanks));
         clusterer->activateFields(simData);
         clusterer->setNumRanks(numRanks);
         
@@ -212,16 +213,17 @@ int main(int argc, char** argv)
             box.loadOrStore(fileWriter.get());
             propagator->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
             propagator->save(fileWriter.get());
+            fileWriter->closeStep();
 
             if (findClusters)
             {
-                fileWriter->addStep(domain.startIndex(), domain.endIndex(), "halo_"+outFile);
+                fileWriter->addStep(domain.startIndex(), domain.endIndex(), "cluster_"+outFile);
                 simData.clust.loadOrStoreAttributes(fileWriter.get());
                 clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
                 clusterer->save(fileWriter.get());
+                fileWriter->closeStep();
             }
 
-            fileWriter->closeStep();
 
             isOutputTriggered = false;
         }

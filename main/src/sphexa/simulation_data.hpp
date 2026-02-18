@@ -52,7 +52,7 @@ public:
     using HydroData = ParticlesData<AccType>;
     using ChemData  = cooling::ChemistryData<RealType>;
     using ClusterData = cluster::ClusterData<AccType>;
-    using HaloData = halo::HaloData<AccType>;
+    using HaloData = cluster::HaloData<AccType>;
 
     //! @brief spacially distributed data for hydrodynamics and gravity
     HydroData hydro;
@@ -77,7 +77,7 @@ public:
         hydro.setOutputFields(outFields);
         chem.setOutputFields(outFields);
         clust.setOutputFields(outFields);
-        halo.setOutputFields();
+        //halo.setOutputFields(outFields);
 
          // check that all requested fields were found
 
