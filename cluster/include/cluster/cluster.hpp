@@ -2,7 +2,6 @@
 
 #include "cluster_mpi.hpp"
 #include "cluster_gpu.h"
-#include "cluster_tree.hpp"
 
 namespace cluster
 {
