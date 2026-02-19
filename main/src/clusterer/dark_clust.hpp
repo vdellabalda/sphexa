@@ -20,7 +20,6 @@
 
 #include "cluster/cluster.hpp"
 #include "cluster/cluster_data.hpp"
-#include "cluster/cluster_tree.hpp"
 #include "cluster/densmax.hpp"
 #include "cluster/halo.hpp"
 #include "cluster/halo_data.hpp"
