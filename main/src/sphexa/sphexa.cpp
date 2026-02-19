@@ -173,8 +173,7 @@ int main(int argc, char** argv)
             percolationLength = percolationLengthDefault;
         }
         simData.clust.setPercLength(percolationLength);
-        simData.clust.numParticlesGlobal = d.numParticlesGlobal;
-        simData.clust.clusterThreshold = clusterThreshold;
+        simData.clust.setThreshold(clusterThreshold);
 
         if (rank==0) { std::cout << "FOF clustering activated with percolation length " << percolationLength << " and cluster threshold " << clusterThreshold << std::endl;}
     }
