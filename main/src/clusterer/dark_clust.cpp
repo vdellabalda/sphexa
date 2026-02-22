@@ -14,9 +14,11 @@ namespace sphexa
 
 template<class DomainType, class ParticleDataType>
 std::unique_ptr<Clusterer<DomainType, ParticleDataType>>
-ClustLib<DomainType, ParticleDataType>::makeDarkClust(std::ostream& output, size_t rank, bool avClean)
+ClustLib<DomainType, ParticleDataType>::makeDarkClust(std::ostream& output, size_t rank, bool subCluster)
 {
-    return std::make_unique<darkClust<DomainType, ParticleDataType>>(output, rank, avClean);
+    if (subCluster) { return std::make_unique<darkClust<true, DomainType, ParticleDataType>>(output, rank); }
+    else { return std::make_unique<darkClust<false, DomainType, ParticleDataType>>(output, rank); }
+
 }
 
 #ifdef USE_CUDA

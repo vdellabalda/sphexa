@@ -41,10 +41,13 @@
 
 #include "init/factory.hpp"
 #include "io/arg_parser.hpp"
+#include "io/cluster_hdf5_writer.hpp"
 #include "io/factory.hpp"
 #include "observables/factory.hpp"
 #include "propagator/factory.hpp"
 #include "clusterer/factory.hpp"
+#include "cluster/hdf5_data.hpp"
+
 #include "sph/types.hpp"
 #include "util/timer.hpp"
 #include "util/utils.hpp"
@@ -99,12 +102,16 @@ int main(int argc, char** argv)
     std::string              outFile      = parser.get("-o", "dump_" + removeModifiers(initCond));
     std::string              profFile     = parser.get("-op", std::string("profile"));
 
-    const bool               findClusters = parser.exists("--find-clusters");
-    const float              b             = parser.get("--percolation-factor", 0.2);
+    const bool               findClusters             = parser.exists("--find-clusters");
+    const double             b                        = parser.get("--percolation-factor", 0.2);
     const double             percolationLengthDefault = parser.get("--percolation-length", 0.0);
-    const int                clusterThreshold = parser.get("--cluster-threshold", 64);
-
-    const std::string clustChoice = "dark";
+    const float              mergeFactor              = parser.get("--merge-factor", 0.3f);
+    const int                clusterThreshold         = parser.get("--cluster-threshold", 64);
+    const bool               findSubclusters          = parser.exists("--subcluster");
+    const bool               sortByCluster            = parser.exists("--sort-by-cluster");
+    const std::string        clustChoice              = "dark";
+    std::string              clustOutFile             = outFile + "_cluster";
+    std::string              clustPropOutFile         = outFile + "_cluster_properties";
 
     std::ofstream nullOutput("/dev/null");
     std::ostream& output = (quiet || rank) ? nullOutput : std::cout;
@@ -135,12 +142,18 @@ int main(int argc, char** argv)
     auto& h = simData.halo;
 
     simData.setOutputFields(outputFields.empty() ? propagator->conservedFields() : outputFields);
+    std::vector<std::string> clusterOutputFields = {"cId", "globalSize", "cMass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity"};
+    simData.setOutputFields(clusterOutputFields);
 
     if (parser.exists("--G")) { d.g = parser.get<double>("--G"); }
     bool  haveGrav = (d.g != 0.0);
     float theta    = parser.get("--theta", haveGrav ? 0.5f : 1.0f);
 
-    if (!parser.exists("-o")) { outFile += fileWriter->suffix(); }
+    if (!parser.exists("-o")) { 
+        outFile += fileWriter->suffix(); 
+        clustOutFile += fileWriter->suffix();
+        clustPropOutFile += fileWriter->suffix();
+    }
     if (writeEnabled) { writeSettings(simInit->constants(), outFile, fileWriter.get()); }
     if (rank == 0) { std::cout << "Data generated for " << d.numParticlesGlobal << " global particles\n"; }
 
@@ -158,22 +171,36 @@ int main(int argc, char** argv)
     viz::init_ascent(d, domain.startIndex());
 
     double percolationLength;
+    std::unique_ptr<IFileWriter> haloWriter;
     if (findClusters)
     {   
-        clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
+        clusterer = clustFactory<Domain, Dataset>(clustChoice, findSubclusters, output, rank);
         clusterer->addCounters(pmroot, getNumLocalRanks(numRanks));
         clusterer->activateFields(simData);
         clusterer->setNumRanks(numRanks);
         
-        double simulationVolume = box.lx()*box.ly()*box.lz();
-        double meanInterparticleSeparation = std::pow(simulationVolume/d.numParticlesGlobal, 1.0/3.0);
-        percolationLength = b*meanInterparticleSeparation;
+        // Calculate percolation length
         if (percolationLengthDefault > 0.0)
         {
             percolationLength = percolationLengthDefault;
         }
-        simData.clust.setPercLength(percolationLength);
-        simData.clust.setThreshold(clusterThreshold);
+        else
+        {
+            double simulationVolume = box.lx() * box.ly() * box.lz();
+            double meanInterparticleSeparation = std::pow(simulationVolume / d.numParticlesGlobal, 1.0/3.0);
+            percolationLength = b * meanInterparticleSeparation;
+        }
+        
+        // Set up clustering parameters
+        c.setPercLength(percolationLength);
+        c.setThreshold(clusterThreshold);
+        c.setMergeFactor(mergeFactor);
+
+        if (rank == 0)
+        {
+            auto haloComm = MPI_COMM_SELF;
+            haloWriter = fileWriterFactory(ascii, haloComm);
+        }
 
         if (rank==0) { std::cout << "FOF clustering activated with percolation length " << percolationLength << " and cluster threshold " << clusterThreshold << std::endl;}
     }
@@ -205,8 +232,6 @@ int main(int argc, char** argv)
 
         if (isOutputTriggered && propagator->isSynced())
         {
-            if (findClusters) clusterer->findClusters(domain, simData);
-
             fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
             simData.hydro.loadOrStoreAttributes(fileWriter.get());
             box.loadOrStore(fileWriter.get());
@@ -216,11 +241,36 @@ int main(int argc, char** argv)
 
             if (findClusters)
             {
-                fileWriter->addStep(domain.startIndex(), domain.endIndex(), "cluster_"+outFile);
+                clusterer->findClusters(domain, simData);
+                //clusterer->computeHaloProperties(domain, simData);
+                fileWriter->addStep(domain.startIndex(), domain.endIndex(), clustOutFile);
                 simData.clust.loadOrStoreAttributes(fileWriter.get());
                 clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
                 clusterer->save(fileWriter.get());
                 fileWriter->closeStep();
+
+                //if (rank == 0)
+                //{
+                //    haloWriter->addStep(0, h.getNumClustersGlobal(), clustPropOutFile);
+                //    clusterer->writeHaloProperties(clustPropOutFile, simData, haloWriter.get());
+                //    haloWriter->closeStep();
+                //}
+                
+                if (sortByCluster) {    
+                    ClusterHDF5Writer hdf5Writer(MPI_COMM_WORLD);
+                    std::vector<std::string> outFieldNames = {"x", "y", "z", "vx", "vy", "vz", "m", "halo_id", "id"};
+
+                    cluster::HDF5Data<AccType> hdf5Data;
+                    hdf5Data.activateFields(outFieldNames);
+                    hdf5Data.gatherFields(outFieldNames, simData, simData.halo.particleToHaloMap);
+                    auto hostData = hdf5Data.getHostData(outFieldNames);
+                    auto clusterInfos = hdf5Data.createClusterInfos(simData.halo);
+
+                    hdf5Writer.createFile(clustOutFile, h.nClusteredGlobal, clusterInfos, outFieldNames);
+                    hdf5Writer.writeParticles(outFieldNames, hostData, clusterInfos);
+                    hdf5Writer.writeClusterMetadata(clusterInfos);
+                    hdf5Writer.close();   
+                }           
             }
 
 

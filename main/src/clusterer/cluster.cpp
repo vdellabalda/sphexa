@@ -99,10 +99,10 @@ int main(int argc, char** argv)
     auto simInit    = initializerFactory<Dataset>(inputFile, glassBlock, fileReader.get());
 
     // Create clusterer
-    auto clusterer = clustFactory<Domain, Dataset>(clustChoice, avClean, output, rank);
+    auto clusterer = clustFactory<Domain, Dataset>(clustChoice, findSubclusters, output, rank);
 
     // Create propagator
-    std::string propChoice = "ve";
+    std::string propChoice = "ve"; // dummy propagator for loading data, not used for actual time integration
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
 
     Dataset simData;
@@ -148,6 +148,9 @@ int main(int argc, char** argv)
         outputFields = {"halo_id", "id"};
     }
     simData.setOutputFields(outputFields);
+    std::vector<std::string> clusterOutputFiels =
+            {"cId", "globalSize", "cMass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity"};
+    simData.setOutputFields(clusterOutputFiels);
 
     // Activate clustering fields
     clusterer->addCounters(pmroot, getNumLocalRanks(numRanks));
@@ -172,7 +175,10 @@ int main(int argc, char** argv)
     c.setThreshold(clusterThreshold);
     c.setMergeFactor(mergeFactor);
 
+    auto haloComm = MPI_COMM_SELF;
+    std::unique_ptr<IFileWriter> haloWriter;    
     if (rank == 0) {
+        haloWriter = fileWriterFactory(ascii, haloComm);
         std::cout << "Percolation length: " << percolationLength << "\n";
     }
 
@@ -225,23 +231,25 @@ int main(int argc, char** argv)
     
     // Write clustering-specific data
     simData.clust.loadOrStoreAttributes(fileWriter.get());
+    propagator->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
     clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
     clusterer->save(fileWriter.get());
+    propagator->save(fileWriter.get());
 
     fileWriter->closeStep();
-
-    auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
-    clusterer->writeMetrics(fileWriterSeq.get(), profFile);
-
+ 
     //Write halo properties to separate file (rank 0 only)
     // Communicator of only rank 
     if (rank == 0)
     {
-        auto haloComm = MPI_COMM_SELF;
-        auto haloWriter = fileWriterFactory(ascii, haloComm);
         std::string haloFile = outFile + "_halos" + haloWriter->suffix();
+        haloWriter->addStep(0, h.getNumClustersGlobal(), haloFile);
         clusterer->writeHaloProperties(haloFile, simData, haloWriter.get());
+        haloWriter->closeStep();
     }
+
+    auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
+    if (profEnabled) { clusterer->writeMetrics(fileWriterSeq.get(), profFile); }
     
     writeTimer.step("Output written");
     totalTimer.step("Total execution time");

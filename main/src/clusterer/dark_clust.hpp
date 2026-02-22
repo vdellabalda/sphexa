@@ -33,7 +33,7 @@ using namespace sph;
 using namespace cluster;
 using util::FieldList;
 
-template<class DomainType, class ParticleDataType>
+template<bool subCluster, class DomainType, class ParticleDataType>
 class darkClust : public Clusterer<DomainType, ParticleDataType>
 {
 protected:
@@ -48,16 +48,23 @@ protected:
 
     GroupData<Acc> groups_;
 
-    using ConservedFields = FieldList<"halo_id", "sub_id", "work_id", "hTight">;
+    using ConservedFields = FieldList<"halo_id">;
 
+    using DependentFields_ =
+        FieldList<"work_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys">;
+
+    using SubClusterFields = FieldList<"sub_id", "hTight">;
+
+    //! @brief what will be allocated if subclustering is enabled
     using DependentFields =
-        FieldList<"flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys", "candidateDensity", "candidateZone">;
+        std::conditional_t<subCluster, decltype(DependentFields_{} + SubClusterFields{}), decltype(DependentFields_{})>;
 
 
 public:
-    darkClust(std::ostream& output, size_t rank, bool avClean)
+    darkClust(std::ostream& output, size_t rank)
         : Base(output, rank)
     {
+        if (subCluster && rank == 0) { std::cout << "Subclustering is activated" << std::endl; }
     }
 
     std::vector<std::string> conservedFields() const override
@@ -74,12 +81,11 @@ public:
         std::apply([&c](auto... f) { c.setDependent(f.value...); }, make_tuple(DependentFields{}));
 
         auto&h = simData.halo;
-        h.setConserved("id", "globalSize", "mass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity");
-        h.setDependent("localSize", "localOffset", "globalOffset");
+        h.setDependent("cId", "globalSize", "cMass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity",
+            "localSize", "localOffset", "globalOffset");
 
         auto& d = simData.hydro;
         d.setConserved("x", "y", "z", "vx", "vy", "vz", "m", "id", "h");
-        d.setDependent("rho", "p", "c", "ax", "ay", "az", "du", "c11", "c12", "c13", "c22", "c23", "c33", "nc");
     }
     
     void sync(DomainType& domain, ParticleDataType& simData) override
@@ -88,12 +94,10 @@ public:
         auto& c = simData.clust;
         auto conserved = std::tie(get<"id">(d), get<"vx">(d), get<"vy">(d), get<"vz">(d));
         auto scratchBuffers = std::tie(
-            get<"ax">(d), get<"ay">(d), get<"az">(d), get<"rho">(d), get<"p">(d), get<"c">(d),
-            get<"du">(d), get<"c11">(d), get<"c12">(d), get<"c13">(d), get<"c22">(d), get<"c23">(d),
-            get<"c33">(d), get<"nc">(d), get<"flagged">(c), get<"idBuf">(c), get<"keyBuf">(c));
+            get<"ax">(d), get<"ay">(d), get<"az">(d), get<"rho">(d), get<"p">(d), get<"c">(d), get<"du">(d), get<"c11">(d), get<"c12">(d));
         domain.sync(get<"keys">(d), get<"x">(d), get<"y">(d), get<"z">(d), get<"h">(d),
                     std::tuple_cat(std::tie(get<"m">(d)), conserved),
-                    scratchBuffers);
+                    std::tuple_cat(scratchBuffers, get<DependentFields>(c)));
         d.treeView = domain.octreeProperties();
     }
 
@@ -110,6 +114,7 @@ public:
         size_t last  = domain.endIndex();
         c.numParticles = domain.nParticles();
         c.numParticlesHalos = domain.nParticlesWithHalos();
+        c.firstIter = true;
 
         computeGroups(first, last, d, domain.box(), groups_);
         timer.step("Grouping particles.");
@@ -120,7 +125,7 @@ public:
 
         if (this->numRanks_ > 1)
         {
-            domain.exchangeHalos(std::tie(get<"globalClusterKeys">(c)), get<"ax">(d), get<"ay">(d));
+            domain.exchangeHalos(std::tie(get<"globalClusterKeys">(c)), get<"keys">(d), get<"keyBuf">(c));
             timer.step("mpi::synchronizeHalos");
             computeGlobalClusterId(d, c, domain);
             timer.step("computeGlobalClusters");
@@ -131,17 +136,17 @@ public:
         timer.step("compactClusterIds");
         pmReader.step();
 
-        h.resize(c.numClustersGlobal);
-        prepareParticleClusterMap(c, h, domain);
-        timer.step("prepareParticleClusterMap");
-        pmReader.step();
+        //h.resize(c.numClustersGlobal);
+        //prepareParticleClusterMap(c, h, domain);
+        //timer.step("prepareParticleClusterMap");
+        //pmReader.step();
     }
 
     void findSubClusters(
         DomainType& domain,
         ParticleDataType& simData
     )
-    {;
+    {
         auto& d = simData.hydro;
         auto& c = simData.clust;
         auto & h = simData.halo;
@@ -152,21 +157,24 @@ public:
         computeGroups(first, last, d, domain.box(), groups_);
         timer.step("FindNeighbors::subcluster");
         pmReader.step();
-
+        
+        release(d, "gradh");
+        acquire(d, "rho");
         computeDensity(groups_.view(), d, domain.box());
         timer.step("Density::subcluster");
         pmReader.step();
 
-        domain.exchangeHalos(std::tie(get<"rho">(d), get<"halo_id">(c)), get<"ax">(d), get<"ay">(d));
+        domain.exchangeHalos(std::tie(get<"rho">(d), get<"halo_id">(c)), get<"keys">(d), get<"keyBuf">(c));
         timer.step("mpi::synchronizeHalos");
 
         computeDensityGroups(groups_.view(), d, c, domain.box());
         timer.step("DensityGroups::subcluster");
         pmReader.step();
+        release(d, "rho");
 
         if (this->numRanks_ > 1)
         {
-            domain.exchangeHalos(std::tie(get<"globalClusterKeys">(c)), get<"ax">(d), get<"ay">(d));
+            domain.exchangeHalos(std::tie(get<"globalClusterKeys">(c)), get<"keys">(d), get<"keyBuf">(c));
             timer.step("mpi::synchronizeHalos");
             computeGlobalClusterId(d, c, domain);
             timer.step("computeGlobalClusterId::subcluster");
@@ -182,10 +190,12 @@ public:
         DomainType& domain,
         ParticleDataType& simData)
     {
-        timer.start();
         auto& d = simData.hydro;
         auto& c = simData.clust;
         auto& h = simData.halo;
+
+        h.resize(c.numClustersGlobal);
+        h.numClustersGlobal = c.numClustersGlobal;
         
         computeHaloPropertiesLocal(
             domain.startIndex(),
@@ -208,18 +218,14 @@ public:
                     const cstone::Box<T>& /*box*/) override
     {
         Base::outputClusterFields(writer, simData);
-        timer.step("FileOutput");
+        timer.step("FileOutput::clusterIds");
     }
 
     void writeHaloProperties(const std::string& filename, ParticleDataType& simData, IFileWriter* writer) override
     {
         if (this->rank_ != 0) return; // Only rank 0 writes
-        
-        timer.start();
         auto& h = simData.halo;
-
-        uint32_t totalNumHalos = h.getNumClustersGlobal();
-        
+        uint32_t totalNumHalos = h.getNumClustersGlobal();        
         if (totalNumHalos == 0) {
             if (this->rank_ == 0) {
                 this->out << "No halos found, skipping halo output." << std::endl;
@@ -227,15 +233,6 @@ public:
             return;
         }
         
-        // Set halo fields for output
-        std::vector<std::string> outFields = 
-            {"id", "globalSize", "mass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity"};
-        h.setOutputFields(outFields);
-        
-        // Add step to HDF5 file for halo output
-        writer->addStep(0, totalNumHalos, filename);
-        
-        // Use the existing field infrastructure to write data
         auto fieldPointers = h.data();
         for (int i = 0; i < h.outputFieldIndices.size(); ++i) {
             int fidx = h.outputFieldIndices[i];
@@ -247,10 +244,8 @@ public:
                 }, fieldPointers[fidx]);
             }
         }
-        
-        writer->closeStep();
-        
-        timer.step("Halo properties output");
+                
+        timer.step("FileOutput::haloProperties");
         
         printf("Halo properties written to: %s\n", filename.c_str());
         printf("Total halos: %u\n", totalNumHalos);
