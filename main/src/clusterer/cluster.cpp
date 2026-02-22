@@ -69,6 +69,7 @@ int main(int argc, char** argv)
     const double             percolationLengthDefault = parser.get("--percolation-length", 0.0);
     const float              mergeFactor              = parser.get("--merge-factor", 0.3f);
     const int                clusterThreshold         = parser.get("--cluster-threshold", 64);
+    const bool               haloProp                 = parser.exists("--halo-prop");
     const bool               findSubclusters          = parser.exists("--subcluster");
     const bool               sortByCluster            = parser.exists("--sort-by-cluster");
     const std::string        clustChoice              = "dark";
@@ -215,7 +216,10 @@ int main(int argc, char** argv)
         }
     }
 
-    clusterer->computeHaloProperties(domain, simData);
+    if (haloProp)
+    {
+        clusterer->computeHaloProperties(domain, simData);
+    }
 
     if (findSubclusters)
     {
@@ -240,7 +244,7 @@ int main(int argc, char** argv)
  
     //Write halo properties to separate file (rank 0 only)
     // Communicator of only rank 
-    if (rank == 0)
+    if (rank == 0 && haloProp)
     {
         std::string haloFile = outFile + "_halos" + haloWriter->suffix();
         haloWriter->addStep(0, h.getNumClustersGlobal(), haloFile);
