@@ -518,18 +518,12 @@ __host__ void computeGlobalClusterIdGPU(
     ParticleDataset& d, ClusterDataset& c, DomainType& domain
 )
 {   
-    int myRank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
-
-    ClusterKeyHashMapManager<ClusterKeyType, ClusterIdType> hashMapManager;
     unsigned numThreads = 256;
 
     LocalIndex nLocal = domain.nParticles();
     LocalIndex nHalo = domain.nParticlesWithHalos() - nLocal;
     LocalIndex nHaloStart = domain.startIndex();
     LocalIndex nHaloEnd = nHalo - nHaloStart;
-
-    //c.thresholdMask.resize(domain.nParticles());
 
     size_t numClusteredHaloStart = cstone::reduceGpu(rawPtr(c.flagged), nHaloStart, size_t(0));
     size_t numClusteredHaloEnd = cstone::reduceGpu(rawPtr(c.flagged)+nHaloStart+nLocal,
@@ -586,70 +580,47 @@ __host__ void computeGlobalClusterIdGPU(
     EdgeType* newEdgesEnd = cstone::uniqueGpu(rawPtr(c.edges),
                     rawPtr(c.edges)+numClusteredHaloStart+numClusteredHaloEnd);
     size_t numUniqueEdges = newEdgesEnd-rawPtr(c.edges);
+    size_t doubledNumUniqueEdges = 2*numUniqueEdges;
+    cstone::DeviceVector<ClusterKeyType> flattenedEdgeKeys(doubledNumUniqueEdges);
+    numBlocks  = (numUniqueEdges + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    flattenEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.edges), numUniqueEdges, rawPtr(flattenedEdgeKeys));
+    checkGpuErrors(cudaGetLastError());
 
     // Allgather of edges
     int numRanks;
     MPI_Comm_size(MPI_COMM_WORLD, &numRanks);
-    std::vector<int> recvCounts(numRanks);
-    std::vector<int> displs(numRanks), counts(numRanks);
-    std::fill(counts.begin(), counts.end(), 1);
-    std::iota(displs.begin(), displs.end(), 0);
-
-    mpiAllgatherv(&numUniqueEdges, 1, recvCounts.data(), counts.data(), displs.data(), MPI_COMM_WORLD);
-
+    std::vector<int> recvCounts(numRanks), displs(numRanks);
+    MPI_Allgather(&doubledNumUniqueEdges, 1, MPI_INT, recvCounts.data(), 1, MPI_INT, MPI_COMM_WORLD);
     displs[0] = 0;
     for (int i = 1; i < numRanks; ++i)
         displs[i] = displs[i - 1] + recvCounts[i - 1];
     int totalCount = displs.back() + recvCounts.back();
-
-    std::vector<EdgeType> globalEdgesHost(totalCount);
-    std::vector<EdgeType> localEdgesHost(numUniqueEdges);
-    memcpyD2H(rawPtr(c.edges), numUniqueEdges, localEdgesHost.data());
+    c.uniqueKeys.resize(totalCount);
+    totalCount /= 2;
     
-    mpiAllgatherv(
-        localEdgesHost.data(), numUniqueEdges,
-        globalEdgesHost.data(), recvCounts.data(), displs.data(),
-        MPI_COMM_WORLD
-    );
-    
-    c.edges.resize(totalCount);
-    memcpyH2D(globalEdgesHost.data(), totalCount, rawPtr(c.edges));
-    // Allgather complete
+    mpiAllgathervGpuDirect<true>(rawPtr(flattenedEdgeKeys), doubledNumUniqueEdges, rawPtr(c.uniqueKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
 
-    // Compute unique cluster Ids from edges
-    c.edgeSrc.resize(totalCount);
-    c.edgeDst.resize(totalCount);
     numBlocks = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    flattenEdgesGpu<<<numBlocks, numThreads>>>(
-        rawPtr(c.edges),
-        totalCount,
-        rawPtr(c.keyBuf)
-    );
-    checkGpuErrors(cudaGetLastError());
+    splitEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.uniqueKeys), totalCount, rawPtr(c.keyBuf), rawPtr(c.keyBuf)+totalCount);
 
-    memcpyD2D(rawPtr(c.keyBuf), totalCount, rawPtr(c.edgeSrc));
-    memcpyD2D(rawPtr(c.keyBuf)+totalCount, totalCount, rawPtr(c.edgeDst));
-
-    cstone::sortGpu(rawPtr(c.keyBuf), rawPtr(c.keyBuf)+2*totalCount);
-    ClusterKeyType* newKeysEnd = cstone::uniqueGpu(rawPtr(c.keyBuf), rawPtr(c.keyBuf)+2*totalCount);
-    size_t numUniqueEdgeKeys = newKeysEnd - rawPtr(c.keyBuf);
-    
-    cstone::sequenceGpu(rawPtr(c.idBuf), numUniqueEdgeKeys, ClusterIdType(0));
+    cstone::sortGpu(rawPtr(c.uniqueKeys), rawPtr(c.uniqueKeys)+2*totalCount);
     checkGpuErrors(cudaGetLastError());
-    checkGpuErrors(hashMapManager.initialize(rawPtr(c.keyBuf), rawPtr(c.idBuf), numUniqueEdgeKeys));
+    ClusterKeyType* newKeysEnd = cstone::uniqueGpu(rawPtr(c.uniqueKeys), rawPtr(c.uniqueKeys)+2*totalCount);
+    checkGpuErrors(cudaGetLastError());
+    size_t numUniqueEdgeKeys = newKeysEnd - rawPtr(c.uniqueKeys);
     
-    // Convert Edges to Edge Indices
-    checkGpuErrors(hashMapManager.lookupBatch(
-        rawPtr(c.edgeSrc),
-        rawPtr(c.idBuf),
-        totalCount
-    ));
-    checkGpuErrors(hashMapManager.lookupBatch(
-        rawPtr(c.edgeDst),
-        rawPtr(c.idBuf)+totalCount,
-        totalCount
-    ));
+    c.uniqueIds.resize(numUniqueEdgeKeys);
+    cstone::sequenceGpu(rawPtr(c.uniqueIds), numUniqueEdgeKeys, ClusterIdType(0));
+    checkGpuErrors(cudaGetLastError());
+    
+    numBlocks  = (2*totalCount + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    binarySearch<<<numBlocks, numThreads>>>(
+        rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), numUniqueEdgeKeys,
+        rawPtr(c.keyBuf), rawPtr(c.idBuf), 2*totalCount);
+    checkGpuErrors(cudaGetLastError());
 
     // perform union-find on edges
     c.clusterParents.resize(numUniqueEdgeKeys);
@@ -658,33 +629,21 @@ __host__ void computeGlobalClusterIdGPU(
 
     numBlocks  = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;                    
-    unionFindGpu<<<numBlocks, numThreads>>>(
-        rawPtr(c.clusterParents),
-        rawPtr(c.idBuf),
-        rawPtr(c.idBuf)+totalCount,
-        totalCount,
-        numUniqueEdgeKeys
-    );
+    unionFindGpu<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.idBuf), rawPtr(c.idBuf)+totalCount, totalCount, numUniqueEdgeKeys);
     checkGpuErrors(cudaGetLastError());    
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), numUniqueEdgeKeys);
     checkGpuErrors(cudaGetLastError());
  
-    // Update local cluster keys to global cluster keys
-    checkGpuErrors(hashMapManager.lookupBatchFlag(
-        rawPtr(c.localClusterKeys)+domain.startIndex(),
-        rawPtr(c.idBuf)+domain.startIndex(),
-        rawPtr(c.work_id)+domain.startIndex(),
-        domain.nParticles())
-    );
-    numBlocks  = (domain.nParticles() + numThreads - 1) / numThreads;
+    numBlocks = (domain.nParticles() + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    binarySearchFlagged<<<numBlocks, numThreads>>>(
+        rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), numUniqueEdgeKeys,
+        rawPtr(c.localClusterKeys)+domain.startIndex(), rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.idBuf), domain.nParticles());
+    checkGpuErrors(cudaGetLastError());
+
     clusterKeyUpdate<<<numBlocks, numThreads>>>(
         rawPtr(c.localClusterKeys)+domain.startIndex(),
-        rawPtr(c.idBuf)+domain.startIndex(),
-        rawPtr(c.work_id)+domain.startIndex(),
-        rawPtr(c.clusterParents),
-        rawPtr(c.keyBuf),
-        domain.nParticles()
-    );    
+        rawPtr(c.idBuf), rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.clusterParents), rawPtr(c.uniqueKeys), domain.nParticles());    
     checkGpuErrors(cudaGetLastError());
 
     // Roots of the union-find are all (global) non-pure clusters
@@ -693,20 +652,10 @@ __host__ void computeGlobalClusterIdGPU(
     cstone::fillGpu(rawPtr(c.thresholdMask), rawPtr(c.thresholdMask)+numUniqueEdgeKeys, unsigned(0));
     numBlocks = (numUniqueEdgeKeys + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    flagNonLocalKeysGpu<<<numBlocks, numThreads>>>(
-        rawPtr(c.clusterParents),
-        rawPtr(c.thresholdMask),
-        numUniqueEdgeKeys
-    );
-    flagSelectGpu(
-        rawPtr(c.keyBuf),
-        rawPtr(c.thresholdMask),
-        rawPtr(c.nonLocalKeys),
-        numUniqueEdgeKeys,
-        rawPtr(c.idBuf), domain.nParticlesWithHalos()
-    );
-
+    flagRoots<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.thresholdMask), numUniqueEdgeKeys);
+    flagSelectGpu(rawPtr(c.uniqueKeys), rawPtr(c.thresholdMask), rawPtr(c.nonLocalKeys), numUniqueEdgeKeys, rawPtr(c.idBuf), domain.nParticlesWithHalos());
     c.numClustersNonLocal = cstone::reduceGpu(rawPtr(c.thresholdMask), numUniqueEdgeKeys, size_t(0));
+
     return;
 }
 template void computeGlobalClusterIdGPU(
@@ -751,7 +700,6 @@ __host__ void computeCompactClusterIdGPU(
         rawPtr(c.keyBuf), domain.nParticlesWithHalos());
     checkGpuErrors(cudaGetLastError());
 
-
     // Find intersection between local clusters and all (global) non-pure clusters
     // To find local non-pure clusters
     size_t numNonLocalKeys = c.numClustersNonLocal;
@@ -780,30 +728,15 @@ __host__ void computeCompactClusterIdGPU(
     
     // Allgather Keys + Key Counts
     size_t sendCount = cstone::reduceGpu(rawPtr(c.thresholdMask), nonLocalCount+localCount, size_t(0));
-    std::vector<int> recvCounts(numRanks);
-    std::vector<int> displs(numRanks), counts(numRanks);
-    std::fill(counts.begin(), counts.end(), 1);
-    std::iota(displs.begin(), displs.end(), 0);
-
-    mpiAllgatherv(&sendCount, 1, recvCounts.data(), counts.data(), displs.data(), MPI_COMM_WORLD);
+    std::vector<int> recvCounts(numRanks), displs(numRanks);
+    MPI_Allgather(&sendCount, 1, MPI_INT, recvCounts.data(), 1, MPI_INT, MPI_COMM_WORLD);
     displs[0] = 0;
     for (int i = 1; i < numRanks; ++i)
         displs[i] = displs[i - 1] + recvCounts[i - 1];
     int totalCount = displs.back() + recvCounts.back();
 
-    std::vector<ClusterKeyType> globalKeysHost(totalCount);
-    std::vector<ClusterIdType> globalKeyCountsHost(totalCount);
-    std::vector<ClusterKeyType> localKeysHost(sendCount);
-    std::vector<ClusterIdType> localKeyCountsHost(sendCount);
-
-    memcpyD2H(rawPtr(c.uniqueKeys), sendCount, localKeysHost.data());    
-    mpiAllgatherv(localKeysHost.data(), sendCount, globalKeysHost.data(), recvCounts.data(), displs.data(), MPI_COMM_WORLD);    
-    memcpyH2D(globalKeysHost.data(), totalCount, rawPtr(c.globalClusterKeys));    
-
-    memcpyD2H(rawPtr(c.localKeyCounts), sendCount, localKeyCountsHost.data());
-    mpiAllgatherv(localKeyCountsHost.data(), sendCount, globalKeyCountsHost.data(), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
-    memcpyH2D(globalKeyCountsHost.data(), totalCount, rawPtr(c.idBuf));
-    // Allgather complete
+    mpiAllgathervGpuDirect<true>(rawPtr(c.uniqueKeys), sendCount, rawPtr(c.globalClusterKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
+    mpiAllgathervGpuDirect<true>(rawPtr(c.localKeyCounts), sendCount, rawPtr(c.idBuf), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
 
     cstone::sortByKeyGpu(rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+totalCount, rawPtr(c.idBuf),
         rawPtr(c.globalClusterKeys)+totalCount, rawPtr(c.idBuf)+totalCount, rawPtr(c.keyBuf), domain.nParticlesWithHalos());
@@ -818,7 +751,6 @@ __host__ void computeCompactClusterIdGPU(
     
     cstone::sortByKeyDescendGpu(rawPtr(c.localKeyCounts), rawPtr(c.localKeyCounts)+numUniqueKeys, rawPtr(c.uniqueKeys));
 
-
     // Index where cluster size drops below threshold
     auto numClusters = cstone::upperBoundReverseGpu(rawPtr(c.localKeyCounts), rawPtr(c.localKeyCounts)+numUniqueKeys, c.getClusterThreshold());
     cstone::fillGpu(rawPtr(c.idMap), rawPtr(c.idMap)+numUniqueKeys, ClusterIdType(0));
@@ -832,7 +764,7 @@ __host__ void computeCompactClusterIdGPU(
     unsigned numBlocks = (domain.nParticles() + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
     directClusterRemapping<<<numBlocks, numThreads>>>(
-        rawPtr(c.localClusterKeys)+domain.startIndex(),
+        rawPtr(c.localClusterKeys)+domain.startIndex(), 
         rawPtr(c.work_id)+domain.startIndex(),
         rawPtr(c.flagged)+domain.startIndex(),
         rawPtr(c.uniqueKeys), // already sorted
@@ -916,7 +848,7 @@ __host__ void prepareParticleClusterMapGPU(
     memcpyH2D(globalCountHost.data(), numClusters, rawPtr(h.globalSize));
     cstone::exclusiveScanGpu(rawPtr(h.globalSize), rawPtr(h.globalSize)+numClusters, rawPtr(h.globalOffset), uint64_t(0));
 
-    cstone::sequenceGpu(rawPtr(h.id), numClusters, ClusterIdType(1));
+    cstone::sequenceGpu(rawPtr(h.cId), numClusters, ClusterIdType(1));
 }
 template void prepareParticleClusterMapGPU(
     cluster::ClusterData<cstone::GpuTag>& c,
