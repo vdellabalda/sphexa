@@ -567,12 +567,24 @@ size_t uniqueCountGpu(const IndexType* first, const IndexType* last)
 template size_t uniqueCountGpu(const unsigned*, const unsigned*);
 template size_t uniqueCountGpu(const unsigned long*, const unsigned long*);
 
-
+// Determine temporary device storage requirements
 template<class KeyType, class IndexType>
-void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in,
-    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out,
-    void* d_temp_storage, size_t tempStorageBytes)
+uint64_t runLengthEncodeTempStorage(uint64_t numElements)
 {
+    uint64_t tempStorageBytes = 0;
+    cub::DeviceRunLengthEncode::Encode(
+        nullptr, tempStorageBytes, (KeyType*)nullptr, (KeyType*)nullptr, (IndexType*)nullptr, (IndexType*)nullptr, numElements);
+    return tempStorageBytes;
+}
+template uint64_t runLengthEncodeTempStorage<unsigned, unsigned>(uint64_t);
+template uint64_t runLengthEncodeTempStorage<uint64_t, unsigned>(uint64_t);
+
+template<class KeyType, class IndexType, class StorageType>
+void runLengthEncodeGpu(size_t num_items, const KeyType* d_in,
+    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out,
+    StorageType* d_temp_storage, size_t numElementsStorage)
+{
+    size_t tempStorageBytes = sizeof(StorageType) * numElementsStorage;
     // Determine temporary device storage requirements
     size_t   temp_storage_bytes = 0;
     checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
@@ -586,11 +598,12 @@ void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in,
         d_temp_storage, temp_storage_bytes,
         d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
 }
-
-template void runLengthEncodeGpu(const unsigned long, const unsigned*,
-    unsigned*, unsigned*, unsigned*, void*, size_t);
-template void runLengthEncodeGpu(const unsigned long, const uint64_t*,
-    uint64_t*, unsigned*, unsigned*, void*, size_t);
+#define RUN_LENGTH_ENCODE_GPU_DB(KeyType, IndexType, StorageType)                                                                     \
+    template void runLengthEncodeGpu(size_t, const KeyType*, KeyType*, IndexType*, IndexType*, StorageType*, size_t)                 
+RUN_LENGTH_ENCODE_GPU_DB(unsigned, unsigned, uint64_t);
+RUN_LENGTH_ENCODE_GPU_DB(uint64_t, unsigned, uint64_t);
+RUN_LENGTH_ENCODE_GPU_DB(unsigned, unsigned, uint32_t);
+RUN_LENGTH_ENCODE_GPU_DB(uint64_t, unsigned, uint32_t);
 
 template<class ValueType, class FlagType>
 void copyIfGpu(const ValueType* src, size_t n, const FlagType* flags, ValueType* dest)

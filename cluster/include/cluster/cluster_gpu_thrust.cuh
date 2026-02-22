@@ -67,8 +67,8 @@ template void transformLocalToGlobalClusterKeys(
 template<class KeyType, class IndexType>
 __global__ void clusterKeyUpdate(
     KeyType* localKeys,
-    IndexType* clusterIds,
-    IndexType* selectFlags,
+    const IndexType* selectFlags,
+    const IndexType* localIds,
     const IndexType* clusterParents,
     const KeyType* uniqueKeys,
     size_t numParticles)
@@ -78,8 +78,7 @@ __global__ void clusterKeyUpdate(
     if (tid >= numParticles) return;
     if (selectFlags[tid] == 0) return;
 
-    IndexType localId = clusterIds[tid];
-    KeyType oldKey = localKeys[tid];
+    IndexType localId = localIds[tid];
     IndexType newClusterId = clusterParents[localId];
     KeyType newKey = uniqueKeys[newClusterId];
     localKeys[tid] = newKey;
@@ -107,29 +106,39 @@ __global__ void constructEdgesGpu(KeyType* edgeSrc, KeyType* edgeDst, size_t n, 
 
 
 template<class EdgeType, class KeyType>
-__global__ void flattenEdgesGpu(EdgeType* edges, size_t n, KeyType* edgeIds)
+__global__ void flattenEdgesGpu(EdgeType* edges, size_t n, KeyType* flatEdges)
 {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) {return;}
 
-    edgeIds[idx]   = edges[idx][0];
-    edgeIds[idx+n] = edges[idx][1];
+    flatEdges[2*idx]   = edges[idx][0];
+    flatEdges[2*idx+1] = edges[idx][1];
+}
+
+template<class KeyType>
+__global__ void splitEdgesGpu(KeyType* flatEdges, size_t n, KeyType* edgeSrc, KeyType* edgeDst)
+{
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) {return;}
+
+    edgeSrc[idx] = flatEdges[2*idx];
+    edgeDst[idx] = flatEdges[2*idx+1];
 }
 
 
 template<class ClusterIdType, class FlagType>
-__global__ void flagNonLocalKeysGpu(
-    const ClusterIdType* clusterParents,
-    FlagType* rootFlags,
-    size_t numUniqueKeys
+__global__ void flagRoots(
+    const ClusterIdType* parents,
+    FlagType* flags,
+    size_t numElements
 )
 {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= numUniqueKeys) {return;}
+    if (idx >= numElements) {return;}
     
-    if (idx == clusterParents[idx])
+    if (idx == parents[idx])
     {
-        rootFlags[idx] = 1;
+        flags[idx] = 1;
     }
 }
 
@@ -144,6 +153,78 @@ __global__ void computeClusterOwnershipGpu(
     if (idx >= numUniqueKeys) {return;}
 
     ownership[idx] = getRankFromClusterKey(uniqueKeys[idx]);
+}
+
+// GPU binary search
+template<class KeyType, class IdType>
+__global__ void binarySearch(
+    const KeyType* keys,
+    const IdType* ids,
+    size_t numKeys,
+    KeyType* searchKeys,
+    IdType* searchIds,
+    size_t numSearchKeys
+)
+{
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numSearchKeys) {return;}
+
+    KeyType key = searchKeys[idx];
+    size_t left = 0, right = numKeys;
+    bool found = false;
+    IdType id = 0;
+    
+    while (left < right) {
+        size_t mid = (left + right) / 2;
+        if (keys[mid] == key) {
+            id = ids[mid];
+            found = true;
+            break;
+        } else if (keys[mid] < key) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    if (!found) { printf("Key %lu not found in binary search\n", key); }
+    
+    searchIds[idx] = id;
+}
+
+// GPU binary search flagged
+template<class KeyType, class IdType, class FlagType>
+__global__ void binarySearchFlagged(
+    const KeyType* keys,
+    const IdType* ids,
+    size_t numKeys,
+    KeyType* searchKeys,
+    IdType* searchIds,
+    FlagType* flags,
+    size_t numSearchKeys
+){
+    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numSearchKeys) {return;}
+
+    KeyType key = searchKeys[idx];
+    size_t left = 0, right = numKeys;
+    bool found = false;
+    IdType id = 0;
+
+    while (left < right) {
+        size_t mid = (left + right) / 2;
+        if (keys[mid] == key) {
+            id = ids[mid];
+            found = true;
+            break;
+        } else if (keys[mid] < key) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    if (found) { searchIds[idx] = id; }
+    flags[idx] = found ? 1 : 0;
 }
 
 
@@ -257,15 +338,28 @@ template std::pair<uint64_t*, uint32_t*> setDifferenceByKeyGpu(
 );
 
 template<class Tinout, class Flag>
+uint64_t flagSelectTempStorage(size_t numElements)
+{
+    size_t temp_storage_bytes = 0;
+    checkGpuErrors(cub::DeviceSelect::Flagged(
+        nullptr, temp_storage_bytes,
+        (Tinout*)nullptr, (Flag*)nullptr, (Tinout*)nullptr, (size_t*)nullptr, numElements));
+    return temp_storage_bytes;
+}
+template uint64_t flagSelectTempStorage<unsigned, unsigned>(size_t);
+template uint64_t flagSelectTempStorage<long unsigned, unsigned>(size_t);
+
+template<class Tinout, class FlagType, class StorageType>
 void flagSelectGpu(
     const Tinout*     input,
-    const Flag*    flags,
+    const FlagType*    flags,
     Tinout*          output,
     size_t         numItems,
-    void*          d_temp_storage,
-    size_t         temp_storage_size
+    StorageType*          d_temp_storage,
+    size_t         numElementsStorage
 )
 {
+    size_t tempStorageBytes = sizeof(StorageType)*numElementsStorage;
     // Determine temporary device storage requirements
     size_t   temp_storage_bytes = 0;
     size_t*   d_num_selected_out;
@@ -276,7 +370,7 @@ void flagSelectGpu(
 
     // Allocate temporary storage
     //checkGpuErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-    if (temp_storage_size < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
+    if (tempStorageBytes < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
 
     // Run selection
     checkGpuErrors(cub::DeviceSelect::Flagged(
@@ -285,10 +379,12 @@ void flagSelectGpu(
 
     checkGpuErrors(cudaFree(d_num_selected_out));
 }
-
-template void flagSelectGpu(const unsigned*, const unsigned*, unsigned*, size_t, void*, size_t);
-template void flagSelectGpu(const long unsigned*, const unsigned*, long unsigned*, size_t, void*, size_t);
-
+#define FLAG_SELECT_GPU_DB(Tinout, FlagType, StorageType)                                                                     \
+        template void flagSelectGpu(const Tinout*, const FlagType*, Tinout*, size_t, StorageType*, size_t)
+FLAG_SELECT_GPU_DB(unsigned, unsigned, uint32_t);
+FLAG_SELECT_GPU_DB(long unsigned, unsigned, uint32_t);
+FLAG_SELECT_GPU_DB(unsigned, unsigned, uint64_t);
+FLAG_SELECT_GPU_DB(long unsigned, unsigned, uint64_t);
 
 // Define predicate: select if flag is bigger than or equal to 
 template<class Flag>
