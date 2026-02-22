@@ -115,8 +115,6 @@ public:
     FieldVector<ClusterKeyType>     globalClusterKeys;
 
     FieldVector<HydroType>          hTight;       // Smoothing length for subcluster detection
-    FieldVector<MassType>           candidateDensity; // density at which cluster would be merged to parent
-    FieldVector<ClusterIdType>      candidateZone; // candidate parent cluster id
     
     // temporary arrays for sorting and run-length encoding
     FieldVector<ClusterIdType>      idBuf;
@@ -156,7 +154,7 @@ public:
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
     inline static constexpr std::array fieldNames{
-        "halo_id", "sub_id", "work_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys", "hTight", "candidateDensity", "candidateZone",};
+        "halo_id", "sub_id", "work_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys", "hTight"};
 
     //! @brief dataset prefix to be prepended to fieldNames for structured output
     static const inline std::string prefix{};
@@ -167,7 +165,7 @@ public:
      */
     auto dataTuple()
     {
-        auto ret = std::tie(halo_id, sub_id, work_id, flagged, idBuf, keyBuf, localClusterKeys, globalClusterKeys, hTight, candidateDensity, candidateZone);
+        auto ret = std::tie(halo_id, sub_id, work_id, flagged, idBuf, keyBuf, localClusterKeys, globalClusterKeys, hTight);
 
 #if defined(__clang__) || __GNUC__ > 11
         static_assert(std::tuple_size_v<decltype(ret)> == fieldNames.size());

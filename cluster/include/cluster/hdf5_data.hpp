@@ -158,7 +158,7 @@ void resize(size_t size)
 
     std::vector<ClusterInfo> createClusterInfos(const cluster::HaloData<AccType>& haloData) {
         std::vector<ClusterInfo> clusterInfos(haloData.numClustersGlobal);
-        auto uniqueId = toHost(haloData.id);
+        auto uniqueId = toHost(haloData.cId);
         auto localCount = toHost(haloData.localSize);
         auto globalCount = toHost(haloData.globalSize);
         auto localOffset = toHost(haloData.localOffset);

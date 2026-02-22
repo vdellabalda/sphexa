@@ -55,8 +55,8 @@ public:
      * The length of these arrays equals the global number of halos
      * if the field is active and is zero if the field is inactive.
      */
-    FieldVector<IdType>             id;
-    FieldVector<Tmass>              mass;
+    FieldVector<IdType>             cId;
+    FieldVector<Tmass>              cMass;
     FieldVector<Tmass>              xCenter;
     FieldVector<Tmass>              yCenter;
     FieldVector<Tmass>              zCenter;
@@ -78,7 +78,7 @@ public:
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
     inline static constexpr std::array fieldNames{
-        "id", "globalSize", "mass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity",
+        "cId", "globalSize", "cMass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity",
         "localSize", "localOffset", "globalOffset"};
     
     //! @brief dataset prefix to be prepended to fieldNames for structured output
@@ -91,7 +91,7 @@ public:
     auto dataTuple()
     {
         auto ret = std::tie(
-            id, globalSize, mass, xCenter, yCenter, zCenter, xVelocity, yVelocity, zVelocity,
+            cId, globalSize, cMass, xCenter, yCenter, zCenter, xVelocity, yVelocity, zVelocity,
             localSize, localOffset, globalOffset
         );
 

@@ -237,7 +237,7 @@ void haloPropertiesGPU(
     cstone::fillGpu(rawPtr(h.xVelocity), rawPtr(h.xVelocity)+numClusters, float(0.0));
     cstone::fillGpu(rawPtr(h.yVelocity), rawPtr(h.yVelocity)+numClusters, float(0.0));
     cstone::fillGpu(rawPtr(h.zVelocity), rawPtr(h.zVelocity)+numClusters, float(0.0));
-    cstone::fillGpu(rawPtr(h.mass), rawPtr(h.mass)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.cMass), rawPtr(h.cMass)+numClusters, float(0.0));
 
     unsigned numThreads = 256;
     unsigned numBlocks = (last - first + numThreads - 1) / numThreads;
@@ -258,7 +258,7 @@ void haloPropertiesGPU(
         rawPtr(h.xVelocity),
         rawPtr(h.yVelocity),
         rawPtr(h.zVelocity),
-        rawPtr(h.mass)
+        rawPtr(h.cMass)
     );
 }
 template void haloPropertiesGPU(
@@ -326,7 +326,7 @@ void communicateHaloPropertiesGPU(
 {   
     // Get the number of halos
     size_t numClusters = h.numClustersGlobal;
-    if (numClusters == 0) return;
+    //if (numClusters == 0) return;
     
     // Reduce all halo properties across processors
     reduceHaloPropertiesGPU(rawPtr(h.xCenter), numClusters);
@@ -335,7 +335,7 @@ void communicateHaloPropertiesGPU(
     reduceHaloPropertiesGPU(rawPtr(h.xVelocity), numClusters);
     reduceHaloPropertiesGPU(rawPtr(h.yVelocity), numClusters);
     reduceHaloPropertiesGPU(rawPtr(h.zVelocity), numClusters);
-    reduceHaloPropertiesGPU(rawPtr(h.mass), numClusters);
+    reduceHaloPropertiesGPU(rawPtr(h.cMass), numClusters);
     
     // Launch kernel to normalize center coordinates by mass to get center of mass
     // and normalize velocities by mass to get mass-weighted velocities
@@ -345,7 +345,7 @@ void communicateHaloPropertiesGPU(
     normalizeByMassKernel<<<numBlocks, numThreads>>>(
             rawPtr(h.xCenter), rawPtr(h.yCenter), rawPtr(h.zCenter),
             rawPtr(h.xVelocity), rawPtr(h.yVelocity), rawPtr(h.zVelocity),
-            rawPtr(h.mass), numClusters
+            rawPtr(h.cMass), numClusters
     );    
 }
 template void communicateHaloPropertiesGPU(size_t first, size_t last, cluster::HaloData<cstone::GpuTag>& h);
