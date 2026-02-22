@@ -123,9 +123,11 @@ auto mpiAllgathervGpuDirect(const Ts* src, int sendCount, Td* dest, const int* c
         {
             if (src != MPI_IN_PLACE)
             {
-                srcStage.resize(sizeof(Ts) * numElements);
+                //srcStage.resize(sizeof(Ts) * numElements);
+                srcStage.resize(sizeof(Ts) * sendCount);
                 srcUse = reinterpret_cast<Ts*>(srcStage.data());
-                memcpyD2H(src, numElements, srcUse);
+                //memcpyD2H(src, numElements, srcUse);
+                memcpyD2H(src, sendCount, srcUse);
             }
         }
 
