@@ -26,7 +26,7 @@ template<class IdType, class KeyType, class Tc, class Th, class Tm>
 __global__ void densestFOFNeighborGPU(
         const LocalIndex* grpStart, const LocalIndex* grpEnd, LocalIndex numGroups,
         const cstone::OctreeNsView<Tc, KeyType> tree, const cstone::Box<Tc> box,
-        unsigned* nc, unsigned ng0, unsigned ngmax, const IdType* fofId, const Tc* x, const Tc* y, const Tc* z,
+        unsigned ng0, unsigned ngmax, const IdType* fofId, const Tc* x, const Tc* y, const Tc* z,
         Th* h, Tm* rho, IdType* parent,
         LocalIndex* nidx, TreeNodeIndex* globalPool
     )
@@ -73,7 +73,7 @@ __global__ void densestFOFNeighborGPU(
         if (fofId[i] == 0) continue; // skip if not in a FOF group
             
         auto ncCapped = stl::min(ncSph - 1, ngmax);
-        nc[i] = ncCapped;
+        //nc[i] = ncCapped;
         parent[i] = densestFOFNeighborLoop<TravConfig::targetSize>(i, neighborsWarp + laneIdx, ncCapped, fofId, rho);
     }
 }
@@ -101,7 +101,7 @@ void computeDensityGroupsGPU(
     cstone::sequenceGpu(rawPtr(c.work_id), c.numParticlesHalos, unsigned(0));
     
     densestFOFNeighborGPU<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
-        grp.groupStart, grp.groupEnd, grp.numGroups, d.treeView, box, rawPtr(d.nc), ng0, ngmax,
+        grp.groupStart, grp.groupEnd, grp.numGroups, d.treeView, box, ng0, ngmax,
         rawPtr(c.halo_id), rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight), rawPtr(d.rho),
         rawPtr(c.work_id), nidxPool, traversalPool);
     checkGpuErrors(cudaGetLastError());
@@ -113,8 +113,6 @@ void computeDensityGroupsGPU(
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.work_id), c.numParticlesHalos);
     checkGpuErrors(cudaGetLastError());
 
-    cstone::fillGpu(rawPtr(c.candidateDensity), rawPtr(c.candidateDensity)+c.numParticlesHalos, float(0));
-    memcpyD2D(rawPtr(c.work_id), c.numParticlesHalos, rawPtr(c.candidateZone));
     cstone::sequenceGpu(rawPtr(c.idBuf), c.numParticlesHalos, ClusterIdType(0));
 
     cstone::resetTraversalCounters<<<1, 1>>>();
