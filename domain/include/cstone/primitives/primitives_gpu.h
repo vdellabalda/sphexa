@@ -143,7 +143,4 @@ template<class KeyType, class IndexType, class StorageType>
 extern void runLengthEncodeGpu(const size_t num_items, const KeyType* d_in, KeyType* d_unique_out, IndexType* d_counts_out,
     IndexType* d_num_runs_out, StorageType* d_temp_storage, size_t numElementsStorage);
 
-template<class ValueType, class FlagType>
-extern void copyIfGpu(const ValueType* src, size_t n, const FlagType* flags, ValueType* dest);
-
 } // namespace cstone

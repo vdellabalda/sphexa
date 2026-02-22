@@ -605,12 +605,4 @@ RUN_LENGTH_ENCODE_GPU_DB(uint64_t, unsigned, uint64_t);
 RUN_LENGTH_ENCODE_GPU_DB(unsigned, unsigned, uint32_t);
 RUN_LENGTH_ENCODE_GPU_DB(uint64_t, unsigned, uint32_t);
 
-template<class ValueType, class FlagType>
-void copyIfGpu(const ValueType* src, size_t n, const FlagType* flags, ValueType* dest)
-{
-    thrust::copy_if(thrust::device, src, src + n, flags, dest, thrust::identity<FlagType>{});
-}
-template void copyIfGpu(const unsigned*, size_t, const unsigned*, unsigned*);
-
-
 } // namespace cstone
