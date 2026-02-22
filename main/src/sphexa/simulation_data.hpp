@@ -77,7 +77,7 @@ public:
         hydro.setOutputFields(outFields);
         chem.setOutputFields(outFields);
         clust.setOutputFields(outFields);
-        //halo.setOutputFields(outFields);
+        halo.setOutputFields(outFields);
 
          // check that all requested fields were found
 

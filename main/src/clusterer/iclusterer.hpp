@@ -119,7 +119,6 @@ protected:
             }
         };
         output(simData.clust, writer);
-        output(simData.hydro, writer);
     }
 
     std::ostream& out;
