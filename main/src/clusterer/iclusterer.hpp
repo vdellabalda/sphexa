@@ -71,6 +71,8 @@ public:
 
     virtual void findClusters(DomainType& domain, ParticleDataType& d){};
 
+    virtual void sortByCluster(DomainType& domain, ParticleDataType& d){};
+
     virtual void findSubClusters(DomainType& domain, ParticleDataType& d){};
 
     virtual void computeHaloProperties(DomainType& domain, ParticleDataType& d){};
