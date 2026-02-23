@@ -235,10 +235,8 @@ int main(int argc, char** argv)
     
     // Write clustering-specific data
     simData.clust.loadOrStoreAttributes(fileWriter.get());
-    propagator->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
     clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
     clusterer->save(fileWriter.get());
-    propagator->save(fileWriter.get());
 
     fileWriter->closeStep();
  
