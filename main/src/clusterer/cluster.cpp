@@ -103,7 +103,7 @@ int main(int argc, char** argv)
     auto clusterer = clustFactory<Domain, Dataset>(clustChoice, findSubclusters, output, rank);
 
     // Create propagator
-    std::string propChoice = "ve"; // dummy propagator for loading data, not used for actual time integration
+    std::string propChoice = "nbody"; // dummy propagator for loading data, not used for actual time integration
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
 
     Dataset simData;
@@ -195,11 +195,39 @@ int main(int argc, char** argv)
     // Perform clustering
     clusterer->sync(domain, simData);
     clusterer->findClusters(domain, simData);
+    if (sortByCluster) { clusterer->sortByCluster(domain, simData); }
+    if (haloProp) { clusterer->computeHaloProperties(domain, simData); }
+    if (findSubclusters) { clusterer->findSubClusters(domain, simData); }
     
+    Timer writeTimer(output);
+    writeTimer.start();
+
+    fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile+fileWriter->suffix());
+    simData.hydro.loadOrStoreAttributes(fileWriter.get());
+    box.loadOrStore(fileWriter.get());
+    
+    // Write clustering-specific data
+    simData.clust.loadOrStoreAttributes(fileWriter.get());
+    clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
+    clusterer->save(fileWriter.get());
+    fileWriter->closeStep();
+    writeTimer.step("FileOutput::clusterData");
+ 
+    //Write halo properties to separate file (rank 0 only)
+    // Communicator of only rank 
+    if (rank == 0 && haloProp)
+    {
+        std::string haloFile = outFile + "_halos" + haloWriter->suffix();
+        haloWriter->addStep(0, h.getNumClustersGlobal(), haloFile);
+        clusterer->writeHaloProperties(haloFile, simData, haloWriter.get());
+        haloWriter->closeStep();
+        writeTimer.step("FileOutput::haloProperties");
+    }
+
     if (sortByCluster) {    
         std::string clusterOutFile = outFile + "_cluster.h5";
         ClusterHDF5Writer hdf5Writer(MPI_COMM_WORLD);
-        std::vector<std::string> outFieldNames = {"x", "y", "z", "vx", "vy", "vz", "m", "halo_id", "id"};
+        std::vector<std::string> outFieldNames = {"x", "y", "z", "halo_id", "id"};
         
         cluster::HDF5Data<AccType> hdf5Data;
         hdf5Data.activateFields(outFieldNames);
@@ -211,49 +239,12 @@ int main(int argc, char** argv)
         hdf5Writer.writeParticles(outFieldNames, hostData, clusterInfos);
         hdf5Writer.writeClusterMetadata(clusterInfos);
         hdf5Writer.close();
-        if (rank == 0) {
-            std::cout << "Cluster-sorted output written to: " << clusterOutFile << "\n";
-        }
-    }
-
-    if (haloProp)
-    {
-        clusterer->computeHaloProperties(domain, simData);
-    }
-
-    if (findSubclusters)
-    {
-        clusterer->findSubClusters(domain, simData);
-    }
-    
-    Timer writeTimer(output);
-    writeTimer.start();
-    
-    fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile+fileWriter->suffix());
-    simData.hydro.loadOrStoreAttributes(fileWriter.get());
-    box.loadOrStore(fileWriter.get());
-    
-    // Write clustering-specific data
-    simData.clust.loadOrStoreAttributes(fileWriter.get());
-    clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
-    clusterer->save(fileWriter.get());
-
-    fileWriter->closeStep();
- 
-    //Write halo properties to separate file (rank 0 only)
-    // Communicator of only rank 
-    if (rank == 0 && haloProp)
-    {
-        std::string haloFile = outFile + "_halos" + haloWriter->suffix();
-        haloWriter->addStep(0, h.getNumClustersGlobal(), haloFile);
-        clusterer->writeHaloProperties(haloFile, simData, haloWriter.get());
-        haloWriter->closeStep();
+        writeTimer.step("FileOuptput::clusterSortedParticles");
     }
 
     auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
     if (profEnabled) { clusterer->writeMetrics(fileWriterSeq.get(), profFile); }
-    
-    writeTimer.step("Output written");
+    writeTimer.step("FileOutput::performanceMetrics");
     totalTimer.step("Total execution time");
 
     if (rank == 0) {
