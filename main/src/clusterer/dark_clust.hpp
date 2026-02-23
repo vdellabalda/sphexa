@@ -85,7 +85,8 @@ public:
             "localSize", "localOffset", "globalOffset");
 
         auto& d = simData.hydro;
-        d.setConserved("x", "y", "z", "vx", "vy", "vz", "m", "id", "h");
+        d.setConserved("vx", "vy", "vz", "id");
+        d.setDependent("ax", "ay", "az", "du", "du_m1");
     }
     
     void sync(DomainType& domain, ParticleDataType& simData) override
@@ -94,7 +95,7 @@ public:
         auto& c = simData.clust;
         auto conserved = std::tie(get<"id">(d), get<"vx">(d), get<"vy">(d), get<"vz">(d));
         auto scratchBuffers = std::tie(
-            get<"ax">(d), get<"ay">(d), get<"az">(d), get<"rho">(d), get<"p">(d), get<"c">(d), get<"du">(d), get<"c11">(d), get<"c12">(d));
+            get<"ax">(d), get<"ay">(d), get<"az">(d), get<"du">(d), get<"du_m1">(d));
         domain.sync(get<"keys">(d), get<"x">(d), get<"y">(d), get<"z">(d), get<"h">(d),
                     std::tuple_cat(std::tie(get<"m">(d)), conserved),
                     std::tuple_cat(scratchBuffers, get<DependentFields>(c)));
@@ -136,16 +137,22 @@ public:
         timer.step("compactClusterIds");
         pmReader.step();
 
-        //h.resize(c.numClustersGlobal);
-        //prepareParticleClusterMap(c, h, domain);
-        //timer.step("prepareParticleClusterMap");
-        //pmReader.step();
     }
 
-    void findSubClusters(
-        DomainType& domain,
-        ParticleDataType& simData
-    )
+    void sortByCluster(DomainType& domain, ParticleDataType& simData) override
+    {
+        auto& d = simData.hydro;
+        auto& c = simData.clust;
+        auto& h = simData.halo;
+
+        h.resize(c.numClustersGlobal);
+        h.numClustersGlobal = c.numClustersGlobal;
+        prepareParticleClusterMap(c, h, domain);
+        timer.step("prepareParticleClusterMap");
+        pmReader.step();
+    }
+
+    void findSubClusters(DomainType& domain, ParticleDataType& simData) override
     {
         auto& d = simData.hydro;
         auto& c = simData.clust;
@@ -158,7 +165,7 @@ public:
         timer.step("FindNeighbors::subcluster");
         pmReader.step();
         
-        release(d, "gradh");
+        release(d, "du");
         acquire(d, "rho");
         computeDensity(groups_.view(), d, domain.box());
         timer.step("Density::subcluster");
@@ -186,9 +193,7 @@ public:
         pmReader.step();
     }
 
-    void computeHaloProperties(
-        DomainType& domain,
-        ParticleDataType& simData)
+    void computeHaloProperties(DomainType& domain, ParticleDataType& simData) override
     {
         auto& d = simData.hydro;
         auto& c = simData.clust;
@@ -218,7 +223,6 @@ public:
                     const cstone::Box<T>& /*box*/) override
     {
         Base::outputClusterFields(writer, simData);
-        timer.step("FileOutput::clusterIds");
     }
 
     void writeHaloProperties(const std::string& filename, ParticleDataType& simData, IFileWriter* writer) override
@@ -245,8 +249,6 @@ public:
             }
         }
                 
-        timer.step("FileOutput::haloProperties");
-        
         printf("Halo properties written to: %s\n", filename.c_str());
         printf("Total halos: %u\n", totalNumHalos);
     }
