@@ -109,6 +109,7 @@ int main(int argc, char** argv)
     const int                clusterThreshold         = parser.get("--cluster-threshold", 64);
     const bool               findSubclusters          = parser.exists("--subcluster");
     const bool               sortByCluster            = parser.exists("--sort-by-cluster");
+    const bool               haloProp                 = parser.exists("--halo-prop");
     const std::string        clustChoice              = "dark";
     std::string              clustOutFile             = outFile + "_cluster";
     std::string              clustPropOutFile         = outFile + "_cluster_properties";
@@ -214,6 +215,12 @@ int main(int argc, char** argv)
 
         propagator->computeForces(domain, simData);
         box = domain.box();
+        if (findClusters) { 
+            clusterer->findClusters(domain, simData);
+            if (haloProp) { clusterer->computeHaloProperties(domain, simData); }
+            if (sortByCluster) { clusterer->sortByCluster(domain, simData); }
+            if (findSubclusters) { clusterer->findSubClusters(domain, simData); }
+        }
 
         if (propagator->isSynced())
         {
@@ -228,7 +235,7 @@ int main(int argc, char** argv)
              (isWallClockReached && writeEnabled) || isOutputTriggered) &&
             d.iteration > startIteration;
 
-        isOutputTriggered = true;
+        //isOutputTriggered = true;
 
         if (isOutputTriggered && propagator->isSynced())
         {
@@ -241,20 +248,18 @@ int main(int argc, char** argv)
 
             if (findClusters)
             {
-                clusterer->findClusters(domain, simData);
-                //clusterer->computeHaloProperties(domain, simData);
                 fileWriter->addStep(domain.startIndex(), domain.endIndex(), clustOutFile);
                 simData.clust.loadOrStoreAttributes(fileWriter.get());
                 clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
                 clusterer->save(fileWriter.get());
                 fileWriter->closeStep();
 
-                //if (rank == 0)
-                //{
-                //    haloWriter->addStep(0, h.getNumClustersGlobal(), clustPropOutFile);
-                //    clusterer->writeHaloProperties(clustPropOutFile, simData, haloWriter.get());
-                //    haloWriter->closeStep();
-                //}
+                if (rank == 0 && haloProp)
+                {
+                    haloWriter->addStep(0, h.getNumClustersGlobal(), clustPropOutFile);
+                    clusterer->writeHaloProperties(clustPropOutFile, simData, haloWriter.get());
+                    haloWriter->closeStep();
+                }
                 
                 if (sortByCluster) {    
                     ClusterHDF5Writer hdf5Writer(MPI_COMM_WORLD);

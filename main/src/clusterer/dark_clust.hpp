@@ -14,8 +14,6 @@
 #include "sph/particles_data.hpp"
 #include "sph/find_neighbors.hpp"
 #include "sph/groups.hpp"
-#include "sph/positions.hpp"
-#include "sph/ts_global.hpp"
 #include "sph/hydro_std/density.hpp"
 
 #include "cluster/cluster.hpp"

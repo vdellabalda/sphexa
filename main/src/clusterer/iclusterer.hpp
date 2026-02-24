@@ -7,6 +7,7 @@
 #pragma once
 
 #include <variant>
+#include <mpi.h>
 
 #include "cstone/sfc/box.hpp"
 #include "io/ifile_io.hpp"
@@ -81,6 +82,34 @@ public:
     virtual void writeHaloProperties(const std::string& filename, ParticleDataType& d, IFileWriter* writer) {}
 
     virtual ~Clusterer() = default;
+
+    void printIterationTimings(DomainType& domain, ParticleDataType& simData)
+    {
+        const auto& d   = simData.hydro;
+        const auto& c   = simData.clust;
+        const auto& box = domain.box();
+        int64_t haloCount = -int64_t(domain.nParticlesWithHalos() - domain.nParticles() );
+        uint64_t edgeCount = c.edgesFoundEc;
+        MPI_Allreduce(MPI_IN_PLACE, &haloCount, 1, MPI_INT64_T, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(MPI_IN_PLACE, &edgeCount, 1, MPI_UINT64_T, MPI_SUM, MPI_COMM_WORLD); 
+
+        auto nodeCount          = domain.globalTree().numLeafNodes;
+        auto particleCount      = domain.nParticles();
+        haloCount = -haloCount; // convert back to positive number
+        auto totalParticleCount = d.numParticlesGlobal;
+
+        out << "### Check ### Global Tree Nodes: " << nodeCount << ", Particles: " << particleCount
+            << ", Halos: " << haloCount << std::endl;
+        out << "### Check ### Computational domain: " << box.xmin() << " " << box.xmax() << " " << box.ymin() << " "
+            << box.ymax() << " " << box.zmin() << " " << box.zmax() << std::endl;
+        out << "### Check ### Focus Tree Nodes: " << domain.focusTree().octreeViewAcc().numLeafNodes << ", maxDepth "
+            << domain.focusTree().depth();
+        if constexpr (cstone::HaveGpu<typename ParticleDataType::AcceleratorType>{})
+        {
+            out << ", maxStackNc " << c.stackUsedEc << ", foundEdges " << edgeCount;
+        }
+        out << "\n=== Total time for clustering " << timer.sumOfSteps() << "s\n\n";
+    }
 
 protected:
     static void outputClusterFields(IFileWriter* writer, ParticleDataType& simData)
