@@ -1,10 +1,8 @@
 /*
- * MIT License
  *
  * SPH-EXA Standalone Clustering Tool
- * Copyright (c) 2024 CSCS, ETH Zurich, University of Basel, University of Zurich
  *
- * Standalone clustering program for post-processing SPH simulation data
+ * Standalone clustering program for post-processing dark matter halos.
  * 
  * @author Vincente Della Balda
  */
@@ -170,18 +168,12 @@ int main(int argc, char** argv)
         double meanInterparticleSeparation = std::pow(simulationVolume / d.numParticlesGlobal, 1.0/3.0);
         percolationLength = b * meanInterparticleSeparation;
     }
+    if (rank == 0) { std::cout << "Percolation length: " << percolationLength << "\n"; }
 
     // Set up clustering parameters
     c.setPercLength(percolationLength);
     c.setThreshold(clusterThreshold);
     c.setMergeFactor(mergeFactor);
-
-    auto haloComm = MPI_COMM_SELF;
-    std::unique_ptr<IFileWriter> haloWriter;    
-    if (rank == 0) {
-        haloWriter = fileWriterFactory(ascii, haloComm);
-        std::cout << "Percolation length: " << percolationLength << "\n";
-    }
 
     // Set up domain for clustering
     uint64_t bucketSizeFocus = 64;
@@ -214,9 +206,12 @@ int main(int argc, char** argv)
     writeTimer.step("FileOutput::clusterData");
  
     //Write halo properties to separate file (rank 0 only)
-    // Communicator of only rank 
+    // Communicator of only rank
+    auto haloComm = MPI_COMM_SELF;
+    std::unique_ptr<IFileWriter> haloWriter;    
     if (rank == 0 && haloProp)
     {
+        haloWriter = fileWriterFactory(ascii, haloComm);
         std::string haloFile = outFile + "_halos" + haloWriter->suffix();
         haloWriter->addStep(0, h.getNumClustersGlobal(), haloFile);
         clusterer->writeHaloProperties(haloFile, simData, haloWriter.get());
@@ -225,7 +220,7 @@ int main(int argc, char** argv)
     }
 
     if (sortByCluster) {    
-        std::string clusterOutFile = outFile + "_cluster.h5";
+        std::string clusterOutFile = outFile + "_cluster" + fileWriter->suffix();
         ClusterHDF5Writer hdf5Writer(MPI_COMM_WORLD);
         std::vector<std::string> outFieldNames = {"x", "y", "z", "halo_id", "id"};
         
@@ -251,6 +246,8 @@ int main(int argc, char** argv)
         std::cout << "Clustering completed successfully!\n";
         std::cout << "Results written to: " << outFile << "\n";
     }
+
+    clusterer->printIterationTimings(domain, simData);
 
     return exitSuccess();
 }
