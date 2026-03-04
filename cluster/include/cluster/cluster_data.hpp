@@ -107,37 +107,31 @@ public:
      * if the field is active and is zero if the field is inactive.
      */
          
-    FieldVector<ClusterIdType>      halo_id; // FOF parent
-    FieldVector<ClusterIdType>      sub_id;
+    FieldVector<ClusterIdType>      halo_id; // FOF cluster ID
+    FieldVector<ClusterIdType>      sub_id;  // used for subcluster ID when subclustering is enabled
     FieldVector<ClusterIdType>      work_id; // temporary field for cluster ID assignment and remapping
-    FieldVector<unsigned>           flagged;
-    FieldVector<ClusterKeyType>     localClusterKeys;
-    FieldVector<ClusterKeyType>     globalClusterKeys;
-
-    FieldVector<HydroType>          hTight;       // Smoothing length for subcluster detection
+    FieldVector<unsigned>            flagged; // temporary field for marking particles during clustering
+    FieldVector<ClusterKeyType>     localClusterKeys; // temporary field for cluster keys of local particles
+    FieldVector<ClusterKeyType>     globalClusterKeys; // temporary field for cluster keys of non-local particles
+    FieldVector<HydroType>          hTight;       // Smoothing length for subcluster detection 
     
-    // temporary arrays for sorting and run-length encoding
-    FieldVector<ClusterIdType>      idBuf;
-    FieldVector<ClusterKeyType>     keyBuf;
-    FieldVector<unsigned>           thresholdMask;
-    FieldVector<ClusterIdType>      idMap;
+    FieldVector<ClusterIdType>      idBuf;  // buffer arrays
+    FieldVector<ClusterKeyType>     keyBuf; // buffer arrays
 
+    // 
     // temporary array for edge construction
-    FieldVector<ClusterKeyType>     edgeSrc;
-    FieldVector<ClusterKeyType>     edgeDst;
     FieldVector<EdgeType>           edges;
+    FieldVector<ClusterKeyType>     edgeSrc; // only used in CPU version
+    FieldVector<ClusterKeyType>     edgeDst; // only used in CPU version
 
     /*! @brief Cluster fields */
     FieldVector<ClusterKeyType>     uniqueKeys;
     FieldVector<ClusterIdType>      uniqueIds;
-    FieldVector<IdType>             globalKeyCounts;
+    FieldVector<ClusterIdType>      idMap;
     FieldVector<IdType>             localKeyCounts;
     FieldVector<IdType>             clusterParents;
-    FieldVector<IdType>             clusterSizes;
-    FieldVector<unsigned>           clusterOwner;
+    FieldVector<IdType>             clusterSizes; // only used in CPU version
     FieldVector<ClusterKeyType>     nonLocalKeys;
-    FieldVector<ClusterIdType>      nonLocalIds;
-    FieldVector<ClusterKeyType>     localKeys;
 
     // Number of local clusters
     FieldVector<IdType>             numClusters;

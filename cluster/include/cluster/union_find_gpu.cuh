@@ -1,9 +1,11 @@
 #pragma once
 
 #include "cstone/cuda/cuda_utils.cuh"
+#include "binary_search.hpp"
 
 namespace unionfind
 {
+using namespace binary_search;
 
 // Find root with path compression
 template<class IdType>
@@ -80,16 +82,24 @@ __global__ void updateRootGPU(IdType* clusterId, size_t lastBody)
     }
 }
 
-template<class LocalIndex>
+template<class KeyType, class IdType>
 __global__ void unionFindGpu(
-    LocalIndex* clusterId,
-    LocalIndex* edgeSrc,
-    LocalIndex* edgeDst,
+    IdType* clusterId,
+    const KeyType* edgeSrc,
+    const KeyType* edgeDst,
+    const KeyType* uniqueKeys,
+    const IdType* uniqueIds,
     size_t numEdges,
-    size_t numClusters)
+    size_t numKeys)
 {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numEdges) return;
-    uniteGPU(clusterId, edgeSrc[idx], edgeDst[idx], numClusters);
+
+    bool found;
+    IdType srcId;
+    IdType dstId;
+    util::tie(found, srcId) = binarySearch(edgeSrc[idx], uniqueKeys, uniqueIds, numKeys);
+    util::tie(found, dstId) = binarySearch(edgeDst[idx], uniqueKeys, uniqueIds, numKeys);
+    uniteGPU(clusterId, srcId, dstId, numKeys);
 }
 }

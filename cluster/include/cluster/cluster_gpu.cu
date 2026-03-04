@@ -457,10 +457,8 @@ __host__ void computeLocalClusterIdGPU(
 
     auto [traversalPool, emptyPool] = cstone::allocateNcStacks(d.traversalStack, 0);
     cstone::resetEdgeTraversalCounters<<<1, 1>>>();
-    checkGpuErrors(cudaGetLastError());
     
     size_t numParticlesHalos = c.getNumParticlesHalos();
-    size_t numParticles = grp.lastBody - grp.firstBody;
     auto percLength = c.getPercLength();
     c.numClusters.resize(1);
     cstone::fillGpu(rawPtr(c.flagged), rawPtr(c.flagged)+numParticlesHalos, unsigned(0));
@@ -473,7 +471,6 @@ __host__ void computeLocalClusterIdGPU(
         rawPtr(d.x), rawPtr(d.y), rawPtr(d.z),
         rawPtr(c.work_id), rawPtr(c.flagged),
         traversalPool, numParticlesHalos);
-    checkGpuErrors(cudaGetLastError());
 
     cstone::EcStats::type stats[cstone::EcStats::numStats];
     checkGpuErrors(cudaMemcpyFromSymbol(stats, GPU_SYMBOL(cstone::ecStats),
@@ -492,17 +489,11 @@ __host__ void computeLocalClusterIdGPU(
     unsigned numBlocks  = (numParticlesHalos + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.work_id), numParticlesHalos);
-    checkGpuErrors(cudaGetLastError());
 
     transformLocalToGlobalClusterKeys(rawPtr(c.work_id),rawPtr(c.localClusterKeys),
         numParticlesHalos, myRank);
-    checkGpuErrors(cudaGetLastError());
     memcpyD2D(rawPtr(c.localClusterKeys)+grp.firstBody, grp.lastBody-grp.firstBody,
         rawPtr(c.globalClusterKeys)+grp.firstBody);
-
-    c.thresholdMask.reserve(numParticles);
-    c.thresholdMask.resize(numParticles);
-    cstone::fillGpu(rawPtr(c.thresholdMask), rawPtr(c.thresholdMask)+numParticles, unsigned(0));
     return;
 }
 template void computeLocalClusterIdGPU(
@@ -530,62 +521,28 @@ __host__ void computeGlobalClusterIdGPU(
                                 nHaloEnd, size_t(0));        
     
     // edges for union-find
-    c.edgeSrc.resize(numClusteredHaloStart + numClusteredHaloEnd);
-    c.edgeDst.resize(numClusteredHaloStart + numClusteredHaloEnd);
     c.edges.resize(numClusteredHaloStart + numClusteredHaloEnd);
-
-    if (numClusteredHaloStart)
-    {
-        flagSelectGpu(
-            rawPtr(c.globalClusterKeys),
-            rawPtr(c.flagged),
-            rawPtr(c.edgeSrc),
-            nHaloStart,
-            rawPtr(c.idBuf), domain.nParticlesWithHalos()
-        );
-        flagSelectGpu(
-            rawPtr(c.localClusterKeys),
-            rawPtr(c.flagged),
-            rawPtr(c.edgeDst),
-            nHaloStart,
-            rawPtr(c.idBuf), domain.nParticlesWithHalos()
-        );
-
-    }
-    if (numClusteredHaloEnd)
-    {
-        flagSelectGpu(
-            rawPtr(c.globalClusterKeys)+domain.endIndex(),
-            rawPtr(c.flagged)+domain.endIndex(),
-            rawPtr(c.edgeSrc)+numClusteredHaloStart,
-            nHaloEnd,
-            rawPtr(c.idBuf), domain.nParticlesWithHalos()
-        );
-        flagSelectGpu(
-            rawPtr(c.localClusterKeys)+domain.endIndex(),
-            rawPtr(c.flagged)+domain.endIndex(),
-            rawPtr(c.edgeDst)+numClusteredHaloStart,
-            nHaloEnd,
-            rawPtr(c.idBuf), domain.nParticlesWithHalos()
-        );
-    }
-
-    unsigned numBlocks  = (numClusteredHaloStart + numClusteredHaloEnd + numThreads - 1) / numThreads;
+    cstone::fillGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+domain.nParticlesWithHalos(), ClusterIdType(0));
+    memcpyD2D(rawPtr(c.flagged), nHaloStart, rawPtr(c.idBuf));
+    memcpyD2D(rawPtr(c.flagged)+nHaloStart+nLocal, nHaloEnd, rawPtr(c.idBuf)+nHaloStart+nLocal);
+    cstone::exclusiveScanGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+domain.nParticlesWithHalos(), rawPtr(c.idBuf));
+    unsigned numBlocks  = (nHalo + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    constructEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.edgeSrc), rawPtr(c.edgeDst),
-                    numClusteredHaloStart+numClusteredHaloEnd, rawPtr(c.edges));
-    checkGpuErrors(cudaGetLastError());  
+    // Could do the followign only using exclusive scan. For a halo particle which is clustered, the prior exclusive scan
+    // value is not equal, i.e. if exScan[i-1]==exScan[i] -> no edge[i].
+    // => If I manage to do clusterRemapping later without c.flagged, I can do exScan in place.
+    constructEdgesGpu<<<numBlocks, numThreads>>>(
+        rawPtr(c.localClusterKeys), rawPtr(c.globalClusterKeys), rawPtr(c.flagged), rawPtr(c.idBuf),
+        nHaloStart, rawPtr(c.edges), nHalo, nLocal);
 
     cstone::sortGpu(rawPtr(c.edges), rawPtr(c.edges)+numClusteredHaloStart+numClusteredHaloEnd);    
     EdgeType* newEdgesEnd = cstone::uniqueGpu(rawPtr(c.edges),
                     rawPtr(c.edges)+numClusteredHaloStart+numClusteredHaloEnd);
     size_t numUniqueEdges = newEdgesEnd-rawPtr(c.edges);
     size_t doubledNumUniqueEdges = 2*numUniqueEdges;
-    cstone::DeviceVector<ClusterKeyType> flattenedEdgeKeys(doubledNumUniqueEdges);
     numBlocks  = (numUniqueEdges + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    flattenEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.edges), numUniqueEdges, rawPtr(flattenedEdgeKeys));
-    checkGpuErrors(cudaGetLastError());
+    flattenEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.edges), numUniqueEdges, rawPtr(c.keyBuf));
 
     // Allgather of edges
     int numRanks;
@@ -594,67 +551,48 @@ __host__ void computeGlobalClusterIdGPU(
     MPI_Allgather(&doubledNumUniqueEdges, 1, MPI_INT, recvCounts.data(), 1, MPI_INT, MPI_COMM_WORLD);
     displs[0] = 0;
     for (int i = 1; i < numRanks; ++i)
-        displs[i] = displs[i - 1] + recvCounts[i - 1];
+        displs[i] = displs[i - 1] + recvCounts[i - 1];  
     int totalCount = displs.back() + recvCounts.back();
     c.uniqueKeys.resize(totalCount);
     totalCount /= 2;
     
-    mpiAllgathervGpuDirect<true>(rawPtr(flattenedEdgeKeys), doubledNumUniqueEdges, rawPtr(c.uniqueKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
+    mpiAllgathervGpuDirect<true>(rawPtr(c.keyBuf), doubledNumUniqueEdges, rawPtr(c.uniqueKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
 
     numBlocks = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
     splitEdgesGpu<<<numBlocks, numThreads>>>(rawPtr(c.uniqueKeys), totalCount, rawPtr(c.keyBuf), rawPtr(c.keyBuf)+totalCount);
 
     cstone::sortGpu(rawPtr(c.uniqueKeys), rawPtr(c.uniqueKeys)+2*totalCount);
-    checkGpuErrors(cudaGetLastError());
     ClusterKeyType* newKeysEnd = cstone::uniqueGpu(rawPtr(c.uniqueKeys), rawPtr(c.uniqueKeys)+2*totalCount);
-    checkGpuErrors(cudaGetLastError());
     size_t numUniqueEdgeKeys = newKeysEnd - rawPtr(c.uniqueKeys);
     
     c.uniqueIds.resize(numUniqueEdgeKeys);
     cstone::sequenceGpu(rawPtr(c.uniqueIds), numUniqueEdgeKeys, ClusterIdType(0));
-    checkGpuErrors(cudaGetLastError());
-    
-    numBlocks  = (2*totalCount + numThreads - 1) / numThreads;
-    if (numBlocks < 1) numBlocks = 1;
-    binarySearch<<<numBlocks, numThreads>>>(
-        rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), numUniqueEdgeKeys,
-        rawPtr(c.keyBuf), rawPtr(c.idBuf), 2*totalCount);
-    checkGpuErrors(cudaGetLastError());
 
     // perform union-find on edges
     c.clusterParents.resize(numUniqueEdgeKeys);
     cstone::sequenceGpu(rawPtr(c.clusterParents), numUniqueEdgeKeys, ClusterIdType(0));
-    checkGpuErrors(cudaGetLastError());
 
     numBlocks  = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;                    
-    unionFindGpu<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.idBuf), rawPtr(c.idBuf)+totalCount, totalCount, numUniqueEdgeKeys);
-    checkGpuErrors(cudaGetLastError());    
+    unionFindGpu<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.keyBuf), rawPtr(c.keyBuf)+totalCount, rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), totalCount, numUniqueEdgeKeys);
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), numUniqueEdgeKeys);
-    checkGpuErrors(cudaGetLastError());
- 
+    
+    // Assigns global compact cluster ID to particles. If not flagged (i.e. part of a cluster), cluster ID remains zero.
     numBlocks = (domain.nParticles() + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    binarySearchFlagged<<<numBlocks, numThreads>>>(
-        rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), numUniqueEdgeKeys,
-        rawPtr(c.localClusterKeys)+domain.startIndex(), rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.idBuf), domain.nParticles());
-    checkGpuErrors(cudaGetLastError());
-
-    clusterKeyUpdate<<<numBlocks, numThreads>>>(
-        rawPtr(c.localClusterKeys)+domain.startIndex(),
-        rawPtr(c.idBuf), rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.clusterParents), rawPtr(c.uniqueKeys), domain.nParticles());    
-    checkGpuErrors(cudaGetLastError());
+    clusterKeyUpdate<<<numBlocks, numThreads>>>(rawPtr(c.localClusterKeys)+domain.startIndex(), rawPtr(c.globalClusterKeys)+domain.startIndex(),
+        rawPtr(c.uniqueKeys), rawPtr(c.uniqueIds), rawPtr(c.clusterParents), numUniqueEdgeKeys, domain.nParticles());
 
     // Roots of the union-find are all (global) non-pure clusters
-    c.thresholdMask.resize(numUniqueEdgeKeys);
+    //c.thresholdMask.resize(numUniqueEdgeKeys);
     c.nonLocalKeys.resize(numUniqueEdgeKeys);
-    cstone::fillGpu(rawPtr(c.thresholdMask), rawPtr(c.thresholdMask)+numUniqueEdgeKeys, unsigned(0));
+    cstone::fillGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+numUniqueEdgeKeys, unsigned(0));
     numBlocks = (numUniqueEdgeKeys + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    flagRoots<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.thresholdMask), numUniqueEdgeKeys);
-    flagSelectGpu(rawPtr(c.uniqueKeys), rawPtr(c.thresholdMask), rawPtr(c.nonLocalKeys), numUniqueEdgeKeys, rawPtr(c.idBuf), domain.nParticlesWithHalos());
-    c.numClustersNonLocal = cstone::reduceGpu(rawPtr(c.thresholdMask), numUniqueEdgeKeys, size_t(0));
+    flagRoots<<<numBlocks, numThreads>>>(rawPtr(c.clusterParents), rawPtr(c.idBuf), numUniqueEdgeKeys);
+    flagSelectGpu(rawPtr(c.uniqueKeys), rawPtr(c.idBuf), rawPtr(c.nonLocalKeys), numUniqueEdgeKeys, rawPtr(c.keyBuf), domain.nParticlesWithHalos());
+    c.numClustersNonLocal = cstone::reduceGpu(rawPtr(c.idBuf), numUniqueEdgeKeys, size_t(0));
 
     return;
 }
@@ -676,29 +614,18 @@ __host__ void computeCompactClusterIdGPU(
 
     auto startIndex = domain.startIndex();
     auto endIndex = domain.endIndex();
+    auto numParticles = domain.nParticles();
 
     // Compact keys of clustered particles
-    flagSelectGpu(
-            rawPtr(c.localClusterKeys)+domain.startIndex(),
-            rawPtr(c.flagged)+domain.startIndex(),
-            rawPtr(c.globalClusterKeys),
-            domain.nParticles(),
-            rawPtr(c.keyBuf), domain.nParticlesWithHalos()
-    );
-
-    size_t numClustered = cstone::reduceGpu(rawPtr(c.flagged)+domain.startIndex(), domain.nParticles(), size_t(0));
-    cstone::sortGpu(rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+numClustered, rawPtr(c.keyBuf));
-    checkGpuErrors(cudaGetLastError());
-    auto numUniqueKeys = cstone::uniqueCountGpu(rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+numClustered);
-    checkGpuErrors(cudaGetLastError());
+    //flagSelectGpu(rawPtr(c.localClusterKeys)+domain.startIndex(), rawPtr(c.flagged)+domain.startIndex(), rawPtr(c.globalClusterKeys),
+    //    domain.nParticles(), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
+    //size_t numClustered = cstone::reduceGpu(rawPtr(c.flagged)+domain.startIndex(), domain.nParticles(), size_t(0));
+    cstone::sortGpu(rawPtr(c.localClusterKeys)+startIndex, rawPtr(c.localClusterKeys)+endIndex, rawPtr(c.keyBuf));
+    auto numUniqueKeys = cstone::uniqueCountGpu(rawPtr(c.localClusterKeys)+startIndex, rawPtr(c.localClusterKeys)+endIndex);
     c.uniqueKeys.resize(numUniqueKeys); 
     c.localKeyCounts.resize(numUniqueKeys);
-    cstone::runLengthEncodeGpu(
-        numClustered, rawPtr(c.globalClusterKeys),
-        rawPtr(c.uniqueKeys), rawPtr(c.localKeyCounts),
-        rawPtr(c.numClusters),
-        rawPtr(c.keyBuf), domain.nParticlesWithHalos());
-    checkGpuErrors(cudaGetLastError());
+    cstone::runLengthEncodeGpu(numParticles, rawPtr(c.localClusterKeys)+startIndex, rawPtr(c.uniqueKeys), rawPtr(c.localKeyCounts),
+        rawPtr(c.numClusters), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
 
     // Find intersection between local clusters and all (global) non-pure clusters
     // To find local non-pure clusters
@@ -716,63 +643,52 @@ __host__ void computeCompactClusterIdGPU(
     size_t localCount = newLocalIterators.first - (rawPtr(c.keyBuf)+nonLocalCount);
     
     // Mark local clusters above threshold for sending
-    c.thresholdMask.resize(nonLocalCount+localCount);
-    cstone::fillGpu(rawPtr(c.thresholdMask), rawPtr(c.thresholdMask)+nonLocalCount, unsigned(1));
-    thresholdMaskGpu(rawPtr(c.idBuf)+nonLocalCount, rawPtr(c.idBuf)+nonLocalCount+localCount,
-        rawPtr(c.thresholdMask)+nonLocalCount, c.getClusterThreshold());
+    size_t sendCount = nonLocalCount;
+    size_t sendCountLocal;
+    memcpyD2D(rawPtr(c.keyBuf), nonLocalCount, rawPtr(c.uniqueKeys));
+    memcpyD2D(rawPtr(c.idBuf), nonLocalCount, rawPtr(c.localKeyCounts));
+    sendCountLocal = selectByThresholdGpu(rawPtr(c.keyBuf)+nonLocalCount, rawPtr(c.idBuf)+nonLocalCount, localCount,
+    c.getClusterThreshold()-1, rawPtr(c.uniqueKeys)+nonLocalCount, rawPtr(c.localClusterKeys), domain.nParticlesWithHalos());
+    sendCountLocal = selectByThresholdGpu(rawPtr(c.idBuf)+nonLocalCount, rawPtr(c.idBuf)+nonLocalCount, localCount,
+    c.getClusterThreshold()-1, rawPtr(c.localKeyCounts)+nonLocalCount, rawPtr(c.localClusterKeys), domain.nParticlesWithHalos());
+    sendCount += sendCountLocal;
 
-    flagSelectGpu(rawPtr(c.keyBuf), rawPtr(c.thresholdMask), rawPtr(c.uniqueKeys),
-        nonLocalCount+localCount, rawPtr(c.globalClusterKeys), domain.nParticlesWithHalos());
-    flagSelectGpu(rawPtr(c.idBuf), rawPtr(c.thresholdMask), rawPtr(c.localKeyCounts),
-        nonLocalCount+localCount, rawPtr(c.globalClusterKeys), domain.nParticlesWithHalos());
-    
     // Allgather Keys + Key Counts
-    size_t sendCount = cstone::reduceGpu(rawPtr(c.thresholdMask), nonLocalCount+localCount, size_t(0));
     std::vector<int> recvCounts(numRanks), displs(numRanks);
     MPI_Allgather(&sendCount, 1, MPI_INT, recvCounts.data(), 1, MPI_INT, MPI_COMM_WORLD);
     displs[0] = 0;
     for (int i = 1; i < numRanks; ++i)
         displs[i] = displs[i - 1] + recvCounts[i - 1];
     int totalCount = displs.back() + recvCounts.back();
-
-    mpiAllgathervGpuDirect<true>(rawPtr(c.uniqueKeys), sendCount, rawPtr(c.globalClusterKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
+    mpiAllgathervGpuDirect<true>(rawPtr(c.uniqueKeys), sendCount, rawPtr(c.localClusterKeys), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
     mpiAllgathervGpuDirect<true>(rawPtr(c.localKeyCounts), sendCount, rawPtr(c.idBuf), recvCounts.data(), displs.data(), MPI_COMM_WORLD);
 
-    cstone::sortByKeyGpu(rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+totalCount, rawPtr(c.idBuf),
-        rawPtr(c.globalClusterKeys)+totalCount, rawPtr(c.idBuf)+totalCount, rawPtr(c.keyBuf), domain.nParticlesWithHalos());
-    numUniqueKeys = cstone::uniqueCountGpu(rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+totalCount);    
+    // Find unique global cluster keys and corresponding counts
+    cstone::sortByKeyGpu(rawPtr(c.localClusterKeys), rawPtr(c.localClusterKeys)+totalCount, rawPtr(c.idBuf),
+        rawPtr(c.localClusterKeys)+totalCount, rawPtr(c.idBuf)+totalCount, rawPtr(c.keyBuf), domain.nParticlesWithHalos());
+    numUniqueKeys = cstone::uniqueCountGpu(rawPtr(c.localClusterKeys), rawPtr(c.localClusterKeys)+totalCount);    
     c.uniqueKeys.resize(numUniqueKeys);
     c.localKeyCounts.resize(numUniqueKeys);
-    c.thresholdMask.resize(numUniqueKeys);
     c.idMap.resize(numUniqueKeys);
-
     std::pair<ClusterKeyType*, ClusterIdType*> new_iterators = cstone::reduceByKeyGpu(
-        rawPtr(c.globalClusterKeys), rawPtr(c.globalClusterKeys)+totalCount, rawPtr(c.idBuf), rawPtr(c.uniqueKeys), rawPtr(c.localKeyCounts));
+        rawPtr(c.localClusterKeys), rawPtr(c.localClusterKeys)+totalCount, rawPtr(c.idBuf), rawPtr(c.uniqueKeys), rawPtr(c.localKeyCounts));
     
+    // Assign global compact cluster Ids according to size, remove all clusters below threshold
     cstone::sortByKeyDescendGpu(rawPtr(c.localKeyCounts), rawPtr(c.localKeyCounts)+numUniqueKeys, rawPtr(c.uniqueKeys));
-
-    // Index where cluster size drops below threshold
     auto numClusters = cstone::upperBoundReverseGpu(rawPtr(c.localKeyCounts), rawPtr(c.localKeyCounts)+numUniqueKeys, c.getClusterThreshold());
     cstone::fillGpu(rawPtr(c.idMap), rawPtr(c.idMap)+numUniqueKeys, ClusterIdType(0));
     cstone::sequenceGpu(rawPtr(c.idMap), numClusters, ClusterIdType(1));
-
     cstone::sortByKeyGpu(rawPtr(c.uniqueKeys), rawPtr(c.uniqueKeys)+numUniqueKeys, rawPtr(c.idMap), rawPtr(c.keyBuf), rawPtr(c.idBuf),
-        rawPtr(c.globalClusterKeys), domain.nParticlesWithHalos());
+        rawPtr(c.localClusterKeys), domain.nParticlesWithHalos());
 
-    // Use direct binary search to remap local cluster keys to global compact cluster Ids
+    // Use direct binary search to remap cluster keys to global compact cluster Ids
     unsigned numThreads = 256;
     unsigned numBlocks = (domain.nParticles() + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
+    // Do I actually need c.flagged here? 
     directClusterRemapping<<<numBlocks, numThreads>>>(
-        rawPtr(c.localClusterKeys)+domain.startIndex(), 
-        rawPtr(c.work_id)+domain.startIndex(),
-        rawPtr(c.flagged)+domain.startIndex(),
-        rawPtr(c.uniqueKeys), // already sorted
-        rawPtr(c.idMap),      // corresponding compact IDs
-        domain.nParticles(),
-        numUniqueKeys
-    );
-    checkGpuErrors(cudaGetLastError());
+        rawPtr(c.globalClusterKeys)+domain.startIndex(), rawPtr(c.work_id)+domain.startIndex(),rawPtr(c.flagged)+domain.startIndex(),
+        rawPtr(c.uniqueKeys),rawPtr(c.idMap),domain.nParticles(),numUniqueKeys);
     if (c.firstIter)
     {
         memcpyD2D(rawPtr(c.work_id)+domain.startIndex(), domain.nParticles(),
@@ -803,25 +719,21 @@ __host__ void prepareParticleClusterMapGPU(
 {
     auto numClusters = c.numClustersGlobal;
     h.numClustersGlobal = numClusters;
+    auto startIndex = domain.startIndex();
+    auto endIndex = domain.endIndex();
+    auto numParticles = domain.nParticles();
     cstone::DeviceVector<LocalIndex> tempBuf(domain.nParticles());
+    cstone::sequenceGpu(rawPtr(tempBuf), domain.nParticles(), LocalIndex(domain.startIndex()));
     
     // Store unique global cluster Ids and count local number of contributions
-    c.thresholdMask.resize(domain.nParticles());
-    cstone::fillGpu(rawPtr(c.thresholdMask), rawPtr(c.thresholdMask)+domain.nParticles(), unsigned(0));
-    thresholdMaskGpu(rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.work_id)+domain.endIndex(),
-        rawPtr(c.thresholdMask), unsigned(1));
-    auto nGrouped = cstone::reduceGpu(rawPtr(c.thresholdMask), domain.nParticles(), size_t(0));
+    auto nGrouped = selectByThresholdGpu(rawPtr(c.work_id)+startIndex, rawPtr(c.work_id)+startIndex, numParticles, unsigned(0),
+        rawPtr(c.idBuf), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
     h.nClusteredLocal = nGrouped;
     h.particleToHaloMap.resize(nGrouped);
     MPI_Allreduce(&h.nClusteredLocal, &h.nClusteredGlobal, 1, MPI_UINT64_T, MPI_SUM, MPI_COMM_WORLD);
-
-    // Create map to sort particles by their cluster Ids
-    flagSelectGpu(rawPtr(c.work_id)+domain.startIndex(), rawPtr(c.thresholdMask), rawPtr(c.idBuf),
-        domain.nParticles(), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
-    cstone::sequenceGpu(rawPtr(tempBuf), domain.nParticles(), LocalIndex(domain.startIndex()));
-    flagSelectGpu(rawPtr(tempBuf), rawPtr(c.thresholdMask), rawPtr(h.particleToHaloMap),
-        domain.nParticles(), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
-
+    nGrouped = selectByThresholdGpu(rawPtr(tempBuf), rawPtr(c.work_id)+startIndex, numParticles, unsigned(0),
+        rawPtr(h.particleToHaloMap), rawPtr(c.keyBuf), domain.nParticlesWithHalos());
+    
     cstone::sortByKeyGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+nGrouped, rawPtr(h.particleToHaloMap));
 
     // Count local particle contributions
@@ -840,14 +752,9 @@ __host__ void prepareParticleClusterMapGPU(
     cstone::exclusiveScanGpu(rawPtr(h.localSize), rawPtr(h.localSize)+numClusters, rawPtr(h.localOffset));
 
     // Compute global counts and offset arrays
-    convertUint32ToUint64Gpu(rawPtr(h.localSize), rawPtr(h.globalSize), numClusters);
-    std::vector<uint64_t> globalCountHost(numClusters);
-    std::vector<uint64_t> globalOffsetHost(numClusters);
-    memcpyD2H(rawPtr(h.globalSize), numClusters, globalCountHost.data());
-    MPI_Allreduce(MPI_IN_PLACE, globalCountHost.data(), numClusters, MPI_UINT64_T, MPI_SUM, MPI_COMM_WORLD);
-    memcpyH2D(globalCountHost.data(), numClusters, rawPtr(h.globalSize));
+    convertUint32ToUint64Gpu(rawPtr(h.localSize), rawPtr(h.globalOffset), numClusters);
+    mpiAllreduceGpuDirect(rawPtr(h.globalOffset), rawPtr(h.globalSize), numClusters, MPI_SUM, MPI_COMM_WORLD);
     cstone::exclusiveScanGpu(rawPtr(h.globalSize), rawPtr(h.globalSize)+numClusters, rawPtr(h.globalOffset), uint64_t(0));
-
     cstone::sequenceGpu(rawPtr(h.cId), numClusters, ClusterIdType(1));
 }
 template void prepareParticleClusterMapGPU(
