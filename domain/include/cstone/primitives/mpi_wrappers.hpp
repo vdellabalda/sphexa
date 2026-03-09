@@ -29,13 +29,19 @@ class MpiType
     using Types = util::TypeList<double, float, char, signed char, unsigned char, short, unsigned short, int, unsigned,
                                  long, unsigned long, long long, unsigned long long>;
 
-    constexpr static MPI_Datatype typeIDs[] = {MPI_DOUBLE, MPI_FLOAT, MPI_CHAR, MPI_SIGNED_CHAR, MPI_UNSIGNED_CHAR,
-                                               MPI_SHORT, MPI_UNSIGNED_SHORT, MPI_INT, MPI_UNSIGNED, MPI_LONG,
-                                               MPI_UNSIGNED_LONG, MPI_LONG_LONG, MPI_UNSIGNED_LONG_LONG};
+    //constexpr static MPI_Datatype typeIDs[] = {MPI_DOUBLE, MPI_FLOAT, MPI_CHAR, MPI_SIGNED_CHAR, MPI_UNSIGNED_CHAR,
+    //                                           MPI_SHORT, MPI_UNSIGNED_SHORT, MPI_INT, MPI_UNSIGNED, MPI_LONG,
+    //                                           MPI_UNSIGNED_LONG, MPI_LONG_LONG, MPI_UNSIGNED_LONG_LONG};
+    static const MPI_Datatype typeIDs[];
+    
     // clang-format on
 public:
     operator MPI_Datatype() const noexcept { return typeIDs[util::FindIndex<T, Types>{}]; }
 };
+template<class T>
+const MPI_Datatype MpiType<T>::typeIDs[] = {MPI_DOUBLE, MPI_FLOAT, MPI_CHAR, MPI_SIGNED_CHAR, MPI_UNSIGNED_CHAR,
+                                            MPI_SHORT, MPI_UNSIGNED_SHORT, MPI_INT, MPI_UNSIGNED, MPI_LONG,
+                                            MPI_UNSIGNED_LONG, MPI_LONG_LONG, MPI_UNSIGNED_LONG_LONG};
 
 template<class T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
 auto mpiSendAsync(T* data, size_t count, int rank, int tag, std::vector<MPI_Request>& requests)
