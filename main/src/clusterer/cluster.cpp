@@ -190,6 +190,7 @@ int main(int argc, char** argv)
     if (sortByCluster) { clusterer->sortByCluster(domain, simData); }
     if (haloProp) { clusterer->computeHaloProperties(domain, simData); }
     if (findSubclusters) { clusterer->findSubClusters(domain, simData); }
+    clusterer->logTimings(domain, simData);
     
     Timer writeTimer(output);
     writeTimer.start();

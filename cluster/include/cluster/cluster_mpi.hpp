@@ -146,7 +146,7 @@ void computeLocalClusterIdImpl(
      const auto* y = d.y.data();
      const auto* z = d.z.data();
 
-     std::fill(c.work_id.data(), c.work_id.data()+domain.nParticlesWithHalos(), ClusterIdType(0));
+     std::fill(c.localClusterIds.data(), c.localClusterIds.data()+domain.nParticlesWithHalos(), ClusterIdType(0));
      std::fill(c.flagged.data(), c.flagged.data()+domain.nParticlesWithHalos(), unsigned(0));
      std::fill(c.idBuf.data(), c.idBuf.data()+domain.nParticlesWithHalos(), ClusterIdType(0));
 
@@ -158,9 +158,9 @@ void computeLocalClusterIdImpl(
      ClusterIdType currentClusterId = 0;
     
      for (size_t i = startIndex; i < endIndex; i++) {
-          if (c.work_id[i]) continue;
+          if (c.localClusterIds[i]) continue;
           currentClusterId += 1;
-          c.work_id[i] = currentClusterId;
+          c.localClusterIds[i] = currentClusterId;
           fofQueue.push(i);
           while (!(fofQueue.empty())) {
                currentSeed = fofQueue.front();
@@ -177,7 +177,7 @@ void computeLocalClusterIdImpl(
                          d.treeView,
                          box,
                          fofQueue,
-                         c.work_id.data(),
+                         c.localClusterIds.data(),
                          domain
                     );
           };
@@ -185,14 +185,14 @@ void computeLocalClusterIdImpl(
 
      // Assign global cluster keys
      assignClusterKey(
-          c.work_id.data(),
-          c.localClusterKeys.data(),
+          c.localClusterIds.data(),
+          c.localClusterIds.data(),
           c.flagged.data(),
           domain.nParticlesWithHalos(),
           myRank
      );
-     std::copy(c.localClusterKeys.data()+domain.startIndex(),
-               c.localClusterKeys.data()+domain.endIndex(),
+     std::copy(c.localClusterIds.data()+domain.startIndex(),
+               c.localClusterIds.data()+domain.endIndex(),
                c.globalClusterKeys.data()+domain.startIndex());
 }
 
@@ -228,13 +228,13 @@ void computeGlobalClusterIdImpl(
           {
                if (c.flagged[i])
                {
-                    c.edgeSrc[edgeIdx] = c.localClusterKeys[i];
+                    c.edgeSrc[edgeIdx] = c.localClusterIds[i];
                     c.edgeDst[edgeIdx] = c.globalClusterKeys[i];
-                    if (c.localClusterKeys[i] < c.globalClusterKeys[i]) {
-                         c.edges[edgeIdx] = EdgeType{c.localClusterKeys[i], c.globalClusterKeys[i]};
+                    if (c.localClusterIds[i] < c.globalClusterKeys[i]) {
+                         c.edges[edgeIdx] = EdgeType{c.localClusterIds[i], c.globalClusterKeys[i]};
                     }
                     else {
-                         c.edges[edgeIdx] = EdgeType{c.globalClusterKeys[i], c.localClusterKeys[i]};
+                         c.edges[edgeIdx] = EdgeType{c.globalClusterKeys[i], c.localClusterIds[i]};
                     }
                     edgeIdx++;
                }
@@ -246,13 +246,13 @@ void computeGlobalClusterIdImpl(
           {
                if (c.flagged[i])
                {
-                    c.edgeSrc[edgeIdx] = c.localClusterKeys[i];
+                    c.edgeSrc[edgeIdx] = c.localClusterIds[i];
                     c.edgeDst[edgeIdx] = c.globalClusterKeys[i];
-                    if (c.localClusterKeys[i] < c.globalClusterKeys[i]) {
-                         c.edges[edgeIdx] = EdgeType{c.localClusterKeys[i], c.globalClusterKeys[i]};
+                    if (c.localClusterIds[i] < c.globalClusterKeys[i]) {
+                         c.edges[edgeIdx] = EdgeType{c.localClusterIds[i], c.globalClusterKeys[i]};
                     } 
                     else {
-                         c.edges[edgeIdx] = EdgeType{c.globalClusterKeys[i], c.localClusterKeys[i]};
+                         c.edges[edgeIdx] = EdgeType{c.globalClusterKeys[i], c.localClusterIds[i]};
                     }
                     edgeIdx++;
                }
@@ -327,10 +327,10 @@ void computeGlobalClusterIdImpl(
      for (int i = domain.startIndex(); i < domain.endIndex(); ++i) 
      {
           // Check if particle is part of cluster spanning multiple ranks
-          if (std::find(c.keyBuf.data(), c.keyBuf.data()+numUniqueEdgeKeys, c.localClusterKeys[i]) != c.keyBuf.data()+numUniqueEdgeKeys)
+          if (std::find(c.keyBuf.data(), c.keyBuf.data()+numUniqueEdgeKeys, c.localClusterIds[i]) != c.keyBuf.data()+numUniqueEdgeKeys)
           {
-               ClusterKeyType updatedClusterKey = c.keyBuf[c.clusterParents[keyToGlobalId[c.localClusterKeys[i]]]];
-               c.localClusterKeys[i] = updatedClusterKey;
+               ClusterKeyType updatedClusterKey = c.keyBuf[c.clusterParents[keyToGlobalId[c.localClusterIds[i]]]];
+               c.localClusterIds[i] = updatedClusterKey;
           }
      }
 
@@ -415,7 +415,7 @@ void computeCompactClusterIdImpl(
      c.uniqueKeys.resize(nParticles);
      c.localKeyCounts.resize(nParticles);
      std::fill(c.localKeyCounts.begin(), c.localKeyCounts.end(), 0);
-     std::copy(c.localClusterKeys.data() + startIndex, c.localClusterKeys.data() + endIndex,
+     std::copy(c.localClusterIds.data() + startIndex, c.localClusterIds.data() + endIndex,
           c.keyBuf.data());
 
      size_t uniqueCount = runLengthEncode(c.keyBuf.data(), nParticles,
@@ -460,10 +460,10 @@ void computeCompactClusterIdImpl(
      }
      // Assign global cluster IDs to local particles
      for (size_t i = startIndex; i < endIndex; ++i) {
-          c.localClusterKeys[i] = keyToGlobalId[c.localClusterKeys[i]];          
+          c.localClusterIds[i] = keyToGlobalId[c.localClusterIds[i]];          
      }
      // Remove clusters below threshold
-     c.numClustersGlobal = removeSmallClusters(c.localClusterKeys.data(), c.work_id.data(), nUniqueKeys,
+     c.numClustersGlobal = removeSmallClusters(c.localClusterIds.data(), c.localClusterIds.data(), nUniqueKeys,
           c.getClusterThreshold(), startIndex, endIndex);
 }
 } // namespace cluster

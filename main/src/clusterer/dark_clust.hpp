@@ -49,7 +49,7 @@ protected:
     using ConservedFields = FieldList<"halo_id">;
 
     using DependentFields_ =
-        FieldList<"work_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys">;
+        FieldList<"flagged", "localClusterIds", "globalClusterKeys", "idBuf", "keyBuf", "scratchBuf">;
 
     using SubClusterFields = FieldList<"sub_id", "hTight">;
 
@@ -215,6 +215,11 @@ public:
             h
         );
         timer.step("communicateHaloProperties");
+    }
+
+    void logTimings(const DomainType& domain, ParticleDataType& simData) override
+    {
+        Base::logDomainStats(domain, simData);
     }
 
     void saveFields(IFileWriter* writer, size_t first, size_t last, ParticleDataType& simData,

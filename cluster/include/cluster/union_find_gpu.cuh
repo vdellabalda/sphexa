@@ -88,7 +88,6 @@ __global__ void unionFindGpu(
     const KeyType* edgeSrc,
     const KeyType* edgeDst,
     const KeyType* uniqueKeys,
-    const IdType* uniqueIds,
     size_t numEdges,
     size_t numKeys)
 {
@@ -98,8 +97,8 @@ __global__ void unionFindGpu(
     bool found;
     IdType srcId;
     IdType dstId;
-    util::tie(found, srcId) = binarySearch(edgeSrc[idx], uniqueKeys, uniqueIds, numKeys);
-    util::tie(found, dstId) = binarySearch(edgeDst[idx], uniqueKeys, uniqueIds, numKeys);
+    util::tie(found, srcId) = binarySearch(edgeSrc[idx], uniqueKeys, numKeys);
+    util::tie(found, dstId) = binarySearch(edgeDst[idx], uniqueKeys, numKeys);
     uniteGPU(clusterId, srcId, dstId, numKeys);
 }
 }

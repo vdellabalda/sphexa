@@ -108,33 +108,31 @@ public:
      */
          
     FieldVector<ClusterIdType>      halo_id; // FOF cluster ID
-    FieldVector<ClusterIdType>      sub_id;  // used for subcluster ID when subclustering is enabled
-    FieldVector<ClusterIdType>      work_id; // temporary field for cluster ID assignment and remapping
-    FieldVector<unsigned>            flagged; // temporary field for marking particles during clustering
-    FieldVector<ClusterKeyType>     localClusterKeys; // temporary field for cluster keys of local particles
+    FieldVector<unsigned>           flagged; // temporary field for marking particles during clustering
+    FieldVector<ClusterIdType>      localClusterIds; // temporary field for cluster keys of local particles
     FieldVector<ClusterKeyType>     globalClusterKeys; // temporary field for cluster keys of non-local particles
-    FieldVector<HydroType>          hTight;       // Smoothing length for subcluster detection 
+    FieldVector<HydroType>          hTight;       // Smoothing length for subcluster detection
     
-    FieldVector<ClusterIdType>      idBuf;  // buffer arrays
-    FieldVector<ClusterKeyType>     keyBuf; // buffer arrays
+    FieldVector<ClusterIdType>      sub_id;  // used for subcluster ID when subclustering is enabled
+
+    // Possibly exchange these with scratch space from unused fields
+    FieldVector<ClusterIdType>      idBuf;  // buffer array for ClusterIdType
+    FieldVector<ClusterKeyType>     keyBuf; // buffer array for ClusterKeyType
+    FieldVector<ClusterKeyType>     scratchBuf; // buffer array for any type
 
     // 
     // temporary array for edge construction
-    FieldVector<EdgeType>           edges;
+    FieldVector<EdgeType>           edges;   // only used in CPU version
     FieldVector<ClusterKeyType>     edgeSrc; // only used in CPU version
     FieldVector<ClusterKeyType>     edgeDst; // only used in CPU version
 
     /*! @brief Cluster fields */
     FieldVector<ClusterKeyType>     uniqueKeys;
-    FieldVector<ClusterIdType>      uniqueIds;
+    FieldVector<IdType>             localKeyCounts; // only used in CPU version
     FieldVector<ClusterIdType>      idMap;
-    FieldVector<IdType>             localKeyCounts;
-    FieldVector<IdType>             clusterParents;
+    FieldVector<IdType>             clusterParents; // only used in CPU version
     FieldVector<IdType>             clusterSizes; // only used in CPU version
     FieldVector<ClusterKeyType>     nonLocalKeys;
-
-    // Number of local clusters
-    FieldVector<IdType>             numClusters;
 
     //DeviceClusterData_t<AccType> devData;
 
@@ -148,7 +146,7 @@ public:
      * Name of each field as string for use e.g in HDF5 output. Order has to correspond to what's returned by data().
      */
     inline static constexpr std::array fieldNames{
-        "halo_id", "sub_id", "work_id", "flagged", "idBuf", "keyBuf", "localClusterKeys", "globalClusterKeys", "hTight"};
+        "halo_id", "sub_id", "flagged", "localClusterIds", "globalClusterKeys", "hTight", "idBuf", "keyBuf", "scratchBuf"};
 
     //! @brief dataset prefix to be prepended to fieldNames for structured output
     static const inline std::string prefix{};
@@ -159,7 +157,7 @@ public:
      */
     auto dataTuple()
     {
-        auto ret = std::tie(halo_id, sub_id, work_id, flagged, idBuf, keyBuf, localClusterKeys, globalClusterKeys, hTight);
+        auto ret = std::tie(halo_id, sub_id, flagged, localClusterIds, globalClusterKeys, hTight, idBuf, keyBuf, scratchBuf);
 
 #if defined(__clang__) || __GNUC__ > 11
         static_assert(std::tuple_size_v<decltype(ret)> == fieldNames.size());

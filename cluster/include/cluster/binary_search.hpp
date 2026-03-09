@@ -8,22 +8,21 @@ namespace binary_search
 {
 
 // GPU binary search
-template<class KeyType, class IdType>
+template<class KeyType>
 HOST_DEVICE_FUN auto binarySearch(
     KeyType searchKey,
     const KeyType* keys,
-    const IdType* ids,
     size_t numKeys
 )
 {
     size_t left = 0, right = numKeys;
     bool found = false;
-    IdType searchId = 0;
+    size_t searchId = 0;
     
     while (left < right) {
         size_t mid = (left + right) / 2;
         if (keys[mid] == searchKey) {
-            searchId = ids[mid];
+            searchId = mid;
             found = true;
             break;
         } else if (keys[mid] < searchKey) {
@@ -33,6 +32,32 @@ HOST_DEVICE_FUN auto binarySearch(
         }
     }
     
-    return util::tuple<bool, IdType>{found, searchId};
+    return util::tuple<bool, size_t>{found, searchId};
+}
+
+
+template<class KeyType>
+HOST_DEVICE_FUN auto binaryFind(
+    KeyType searchKey,
+    const KeyType* keys,
+    size_t numKeys
+)
+{
+    size_t left = 0, right = numKeys;
+    bool found = false;
+    
+    while (left < right) {
+        size_t mid = (left + right) / 2;    
+        if (keys[mid] == searchKey) {
+            found = true;
+            break;
+        } else if (keys[mid] < searchKey) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    
+    return found;
 }
 }

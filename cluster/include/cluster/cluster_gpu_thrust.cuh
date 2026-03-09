@@ -3,6 +3,7 @@
 #include <thrust/transform.h>
 #include <thrust/execution_policy.h>
 #include <thrust/set_operations.h>
+#include <thrust/partition.h>
 #include "cstone/cuda/cub.hpp"
 #include "cstone/cuda/errorcheck.cuh"
 #include "cstone/util/array.hpp"
@@ -54,25 +55,22 @@ struct key32ToKey64Functor
 
 template<class IndexType, class KeyType>
 void transformLocalToGlobalClusterKeys(
-    const IndexType* localClusterKeys,
+    const IndexType* localClusterIds,
     KeyType* globalClusterKeys,
-    const size_t n,
-    const int rank
+    size_t n,
+    int rank
 )
 {   
-    thrust::transform(thrust::device, localClusterKeys, localClusterKeys+n, globalClusterKeys,
+    thrust::transform(thrust::device, localClusterIds, localClusterIds+n, globalClusterKeys,
         key32ToKey64Functor<KeyType, IndexType>(rank)); 
 }
-template void transformLocalToGlobalClusterKeys(
-    const uint32_t*, uint64_t*, const size_t, const int);
+template void transformLocalToGlobalClusterKeys(const uint32_t*, uint64_t*, size_t, int);
 
 
 template<class KeyType, class IndexType>
 __global__ void clusterKeyUpdate(
-    KeyType* localKeys,
     KeyType* globalKeys,
     const KeyType* uniqueKeys,
-    const IndexType* uniqueIds,
     const IndexType* clusterParents,
     size_t numKeys,
     size_t numParticles)
@@ -82,20 +80,19 @@ __global__ void clusterKeyUpdate(
 
     bool found;
     IndexType localId;
-    util::tie(found, localId) = binarySearch(localKeys[tid], uniqueKeys, uniqueIds, numKeys);
+    util::tie(found, localId) = binarySearch(globalKeys[tid], uniqueKeys, numKeys);
     if (!found) { return;}
 
     IndexType newClusterId = clusterParents[localId];
     KeyType newKey = uniqueKeys[newClusterId];
-    localKeys[tid] = newKey;
     globalKeys[tid] = newKey;
     return;
 }
 
 
 template<class KeyType, class FlagType, class IdType, class EdgeType>
-__global__ void constructEdgesGpu(const KeyType* localClusterKeys, const KeyType* globalClusterKeys, const FlagType* flagged, const IdType* compactIndex, 
-                                size_t nHaloStart, EdgeType* edges, size_t numParticlesHalos, size_t numParticles)
+__global__ void constructEdgesGpu(const IdType* localClusterIds, const KeyType* globalClusterKeys, const FlagType* flagged, const IdType* compactIndex, 
+                                size_t nHaloStart, EdgeType* edges, size_t numParticlesHalos, size_t numParticles, int rank)
 {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numParticlesHalos) {return;}
@@ -103,16 +100,19 @@ __global__ void constructEdgesGpu(const KeyType* localClusterKeys, const KeyType
     if (idx >= nHaloStart) { idx += numParticles; }
     if (flagged[idx] == 0) { return; }
     unsigned edgeIdx = compactIndex[idx];
+    
+    IdType localId = localClusterIds[idx];
+    KeyType localKey = ((static_cast<KeyType>(rank) << 32) | static_cast<KeyType>(localId));
 
-    if (localClusterKeys[idx] < globalClusterKeys[idx])
+    if (localKey < globalClusterKeys[idx])
     {
-        edges[edgeIdx][0] = localClusterKeys[idx];
+        edges[edgeIdx][0] = localKey;
         edges[edgeIdx][1] = globalClusterKeys[idx];
     }
     else
     {
         edges[edgeIdx][0] = globalClusterKeys[idx];
-        edges[edgeIdx][1] = localClusterKeys[idx];
+        edges[edgeIdx][1] = localKey;
     }
 }
 
@@ -138,22 +138,6 @@ __global__ void splitEdgesGpu(KeyType* flatEdges, size_t n, KeyType* edgeSrc, Ke
 }
 
 
-template<class ClusterIdType, class FlagType>
-__global__ void flagRoots(
-    const ClusterIdType* parents,
-    FlagType* flags,
-    size_t numElements
-)
-{
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= numElements) {return;}
-    
-    if (idx == parents[idx])
-    {
-        flags[idx] = 1;
-    }
-}
-
 template<class ClusterKeyType, class IdType>
 __global__ void computeClusterOwnershipGpu(
     const ClusterKeyType* uniqueKeys,
@@ -167,50 +151,11 @@ __global__ void computeClusterOwnershipGpu(
     ownership[idx] = getRankFromClusterKey(uniqueKeys[idx]);
 }
 
-// GPU binary search
-template<class KeyType, class IdType>
-__global__ void binarySearchGpu(
-    const KeyType* keys,
-    const IdType* ids,
-    size_t numKeys,
-    KeyType* searchKeys,
-    IdType* searchIds,
-    size_t numSearchKeys
-)
-{
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= numSearchKeys) {return;}
-
-    KeyType key = searchKeys[idx];
-    bool found;
-    util::tie(found, searchIds[idx]) = binarySearch(key, keys, ids, numKeys);
-}
-
-// GPU binary search flagged
-template<class KeyType, class IdType, class FlagType>
-__global__ void binarySearchFlaggedGpu(
-    const KeyType* keys,
-    const IdType* ids,
-    size_t numKeys,
-    KeyType* searchKeys,
-    IdType* searchIds,
-    FlagType* flags,
-    size_t numSearchKeys
-){
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= numSearchKeys) {return;}
-
-    KeyType key = searchKeys[idx];
-    IdType id;
-    util::tie(flags[idx], id) = binarySearch(key, keys, ids, numKeys);
-    if (flags[idx]) { searchIds[idx] = id; }
-}
-
 
 // Cluster remapping with binary search
 template<class ClusterKeyType, class ClusterIdType>
 __global__ void directClusterRemapping(
-    const ClusterKeyType* localClusterKeys,
+    const ClusterKeyType* globalClusterKeys,
     ClusterIdType* finalClusterIds,
     const ClusterIdType* selectFlags,
     const ClusterKeyType* sortedKeys,
@@ -226,7 +171,7 @@ __global__ void directClusterRemapping(
             return;
         }
 
-    ClusterKeyType myKey = localClusterKeys[tid];
+    ClusterKeyType myKey = globalClusterKeys[tid];
     size_t left = 0, right = numSortedKeys;
     bool found = false;
     ClusterIdType compactId = 0;
@@ -316,6 +261,34 @@ template std::pair<uint64_t*, uint32_t*> setDifferenceByKeyGpu(
     uint32_t*
 );
 
+template<class KeyType, class ValueType>
+struct clusterSendFlag
+{
+    ValueType threshold;
+    KeyType* nonLocalKeys;
+    size_t numNonLocalKeys;
+    clusterSendFlag(ValueType threshold_, KeyType* nonLocalKeys_, size_t numNonLocalKeys_) 
+        : threshold(threshold_), nonLocalKeys(nonLocalKeys_), numNonLocalKeys(numNonLocalKeys_) {}
+
+    __host__ __device__ bool operator()(const thrust::tuple<KeyType, ValueType>& t) const
+    {
+        KeyType key = thrust::get<0>(t);
+        ValueType count = thrust::get<1>(t);
+        bool isNonLocal = binaryFind(key, nonLocalKeys, numNonLocalKeys);
+        return isNonLocal || (count >= threshold);
+    };
+};
+
+template<class KeyType, class ValueType>
+std::pair<KeyType*, ValueType*> selectSendClustersGpu(KeyType* clusterKeys, ValueType* counts, KeyType* nonLocalKeys, ValueType threshold, size_t numClusters, size_t numNonLocalClusters)
+{
+    thrust::zip_iterator<thrust::tuple<KeyType*, ValueType*>> first = thrust::make_zip_iterator(thrust::make_tuple(clusterKeys, counts));
+    thrust::zip_iterator<thrust::tuple<KeyType*, ValueType*>> last = thrust::make_zip_iterator(thrust::make_tuple(clusterKeys + numClusters, counts + numClusters));
+    thrust::zip_iterator<thrust::tuple<KeyType*, ValueType*>> newIt = thrust::partition(thrust::device, first, last, clusterSendFlag<KeyType, ValueType>(threshold, nonLocalKeys, numNonLocalClusters));
+    return std::make_pair(thrust::get<0>(newIt.get_iterator_tuple()), thrust::get<1>(newIt.get_iterator_tuple()));
+}
+template std::pair<uint64_t*, uint32_t*> selectSendClustersGpu(uint64_t*, uint32_t*, uint64_t*, uint32_t, size_t, size_t);
+
 template<class CompareType>
 struct GreaterThan
 {
@@ -357,6 +330,44 @@ template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, u
 template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, unsigned, long unsigned*, uint32_t*, size_t);
 template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, unsigned, unsigned*, uint64_t*, size_t);
 template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, unsigned, long unsigned*, uint64_t*, size_t);
+
+
+template<class IdType>
+struct FlagRootFunctor
+{
+    const IdType* parents;
+        FlagRootFunctor(const IdType* parents_) : parents(parents_) {}
+
+    __host__ __device__ bool operator()(IdType idx) const
+        { return (idx == parents[idx]) ? 1 : 0; }
+};
+
+template<class KeyType, class IdType, class StorageType>
+size_t selectRootsGpu(const KeyType* uniqueKeys, const IdType* parents, size_t numKeys, KeyType* roots, StorageType* d_temp_storage, size_t numElementsStorage)
+{
+    // Determine temporary device storage requirements
+    size_t tempStorageBytes = sizeof(StorageType)*numElementsStorage;
+    size_t   temp_storage_bytes = 0;
+    size_t*   d_num_selected_out;
+    checkGpuErrors(cudaMalloc(&d_num_selected_out, sizeof(size_t)));
+    checkGpuErrors(cub::DeviceSelect::FlaggedIf(
+        nullptr, temp_storage_bytes,
+        uniqueKeys, parents, roots, d_num_selected_out, numKeys, FlagRootFunctor<IdType>(parents)));
+    if (tempStorageBytes < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
+    
+    checkGpuErrors(cub::DeviceSelect::FlaggedIf(
+        d_temp_storage, temp_storage_bytes,
+        uniqueKeys, parents, roots, d_num_selected_out, numKeys, FlagRootFunctor<IdType>(parents)));
+
+    size_t numSelected;
+    checkGpuErrors(cudaMemcpy(&numSelected, d_num_selected_out, sizeof(size_t), cudaMemcpyDeviceToHost));
+
+    checkGpuErrors(cudaFree(d_num_selected_out));
+    return numSelected;
+}
+template size_t selectRootsGpu(const uint64_t*, const unsigned*, size_t, uint64_t*, uint32_t*, size_t);
+template size_t selectRootsGpu(const uint64_t*, const unsigned*, size_t, uint64_t*, uint64_t*, size_t);
+
 
 template<class Tinout, class Flag>
 uint64_t flagSelectTempStorage(size_t numElements)
@@ -406,45 +417,6 @@ FLAG_SELECT_GPU_DB(unsigned, unsigned, uint32_t);
 FLAG_SELECT_GPU_DB(long unsigned, unsigned, uint32_t);
 FLAG_SELECT_GPU_DB(unsigned, unsigned, uint64_t);
 FLAG_SELECT_GPU_DB(long unsigned, unsigned, uint64_t);
-
-// Define predicate: select if flag is bigger than or equal to 
-template<class Flag>
-struct isLargerThanThreshold
-    {
-        size_t threshold;
-        isLargerThanThreshold(size_t threshold_) : threshold(threshold_) {}
-        __host__ __device__ bool operator()(const Flag& x) const
-        {
-            return x >= threshold;
-        }
-    };
-
-template<class Tin, class Flag, class Tout>
-void flagIfSelectGpu(
-    const Tin*     input,
-    const Flag*    flags,
-    Tout*          output,
-    int*           numSelectedOut,
-    size_t         numItems,
-    size_t         clusterThreshold
-)
-{
-    // Determine temporary device storage requirements
-    void     *d_temp_storage = nullptr;
-    size_t temp_storage_bytes = 0;
-    cub::DeviceSelect::FlaggedIf(nullptr, temp_storage_bytes, input, flags, output,
-                    numSelectedOut, numItems, isLargerThanThreshold<Flag>(clusterThreshold)
-    );
-
-    // Allocate temporary storage
-    checkGpuErrors(cudaMalloc(&d_temp_storage, temp_storage_bytes));
-
-    // Run selection
-    cub::DeviceSelect::FlaggedIf(nullptr, temp_storage_bytes, input, flags, output,
-                    numSelectedOut, numItems, isLargerThanThreshold<Flag>(clusterThreshold)
-    );
-    checkGpuErrors(cudaFree(d_temp_storage));
-}
 
 template<class IndexType>
 struct MultipleSequenceFunctor

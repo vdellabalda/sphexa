@@ -98,19 +98,19 @@ void computeDensityGroupsGPU(
     cstone::resetTraversalCounters<<<1, 1>>>();
 
     cstone::scaleGpu(rawPtr(d.h)+grp.firstBody, rawPtr(d.h)+grp.lastBody, rawPtr(c.hTight)+grp.firstBody, ngfac);
-    cstone::sequenceGpu(rawPtr(c.work_id), c.numParticlesHalos, unsigned(0));
+    cstone::sequenceGpu(rawPtr(c.localClusterIds), c.numParticlesHalos, unsigned(0));
     
     densestFOFNeighborGPU<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
         grp.groupStart, grp.groupEnd, grp.numGroups, d.treeView, box, ng0, ngmax,
         rawPtr(c.halo_id), rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight), rawPtr(d.rho),
-        rawPtr(c.work_id), nidxPool, traversalPool);
+        rawPtr(c.localClusterIds), nidxPool, traversalPool);
     checkGpuErrors(cudaGetLastError());
 
     // Update root of each particle
     unsigned numThreads = 128;
     unsigned numBlocks = (c.numParticlesHalos + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.work_id), c.numParticlesHalos);
+    updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), c.numParticlesHalos);
     checkGpuErrors(cudaGetLastError());
 
     cstone::sequenceGpu(rawPtr(c.idBuf), c.numParticlesHalos, ClusterIdType(0));
@@ -121,7 +121,7 @@ void computeDensityGroupsGPU(
     densitySaddlesGPU<<<numBlocks, numThreads>>>(
         grp.groupStart, grp.groupEnd, grp.numGroups,
         d.treeView, box, rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight),
-        rawPtr(d.rho), rawPtr(c.halo_id), rawPtr(c.work_id), rawPtr(d.nc), ngmax,
+        rawPtr(d.rho), rawPtr(c.halo_id), rawPtr(c.localClusterIds), rawPtr(d.nc), ngmax,
         c.mergeFactor, rawPtr(c.idBuf), c.numParticlesHalos, nidxPool, traversalPool
     );
     checkGpuErrors(cudaGetLastError());
@@ -129,16 +129,12 @@ void computeDensityGroupsGPU(
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.idBuf), c.numParticlesHalos);
     checkGpuErrors(cudaGetLastError());
 
-    // Update c.work_id to reflect merged zones
-    updateIdGPU<<<numBlocks, numThreads>>>(rawPtr(c.work_id), rawPtr(c.idBuf), c.numParticlesHalos);
+    // Update c.localClusterIds to reflect merged zones
+    updateIdGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), rawPtr(c.idBuf), c.numParticlesHalos);
     checkGpuErrors(cudaGetLastError());
     
-    transformLocalToGlobalClusterKeys(rawPtr(c.work_id),rawPtr(c.localClusterKeys),
-        c.numParticlesHalos, myRank);
-    checkGpuErrors(cudaGetLastError());
-    memcpyD2D(rawPtr(c.localClusterKeys)+grp.firstBody, grp.lastBody-grp.firstBody,
-        rawPtr(c.globalClusterKeys)+grp.firstBody);
-    
+    transformLocalToGlobalClusterKeys(rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), c.numParticlesHalos, myRank);
+    checkGpuErrors(cudaGetLastError());    
 }
 template void computeDensityGroupsGPU(
     const cstone::GroupView& grp, sphexa::ParticlesData<cstone::GpuTag>& d,

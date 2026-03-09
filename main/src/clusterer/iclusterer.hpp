@@ -78,6 +78,8 @@ public:
 
     virtual void computeHaloProperties(DomainType& domain, ParticleDataType& d){};
 
+    virtual void logTimings(const DomainType& domain, ParticleDataType& simData) {};
+
     //! @brief write all halo properties to HDF5 file (rank 0 only)
     virtual void writeHaloProperties(const std::string& filename, ParticleDataType& d, IFileWriter* writer) {}
 
@@ -151,6 +153,26 @@ protected:
         };
         output(simData.hydro, writer);
         output(simData.clust, writer);
+    }
+
+    void logDomainStats(const DomainType& domain, ParticleDataType& simData)
+    {
+        timer.logStatistics("numParticles", domain.nParticles());
+        timer.logStatistics("numHalos", domain.nParticlesWithHalos() - domain.nParticles());
+        timer.logStatistics("assignment", domain.assignmentStart());
+
+        auto hostMem = simData.hydro.memStats();
+        timer.logStatistics("hostMemSizeBytes", hostMem[1]);
+        timer.logStatistics("hostCapSizeBytes", hostMem[2]);
+
+        using AccType = ParticleDataType::AcceleratorType;
+        if constexpr (cstone::HaveGpu<AccType>{})
+        {
+            auto devMem = simData.hydro.memStats();
+            timer.logStatistics("devMemSizeBytes", devMem[1]);
+            timer.logStatistics("devCapSizeBytes", devMem[2]);
+            timer.logStatistics("devFreeSizeBytes", devMem[3]);
+        }
     }
 
     std::ostream& out;
