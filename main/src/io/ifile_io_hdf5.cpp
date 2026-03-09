@@ -61,7 +61,7 @@ public:
         MPI_Comm_size(comm, &numRanks_);
     }
 
-    ~H5PartWriter() override { closeStep(); }
+    ~H5PartWriter() override { H5PartWriter::closeStep(); }
 
     [[nodiscard]] int rank() const override { return rank_; }
     [[nodiscard]] int numRanks() const override { return numRanks_; }
@@ -176,15 +176,8 @@ public:
 
     ~H5PartWriterSeq() override
     {
-        if (rank_ == 0) { closeStep(); }
-        // Only free communicator if it's not MPI_COMM_NULL and MPI is still active
-        if (comm_ != MPI_COMM_NULL) {
-            int finalized;
-            MPI_Finalized(&finalized);
-            if (!finalized) {
-                MPI_Comm_free(&comm_);
-            }
-        }
+        if (rank_ == 0) { H5PartWriter::closeStep(); }
+        MPI_Comm_free(&comm_);
     }
 
     void addStep(size_t firstIndex, size_t lastIndex, std::string path) override
