@@ -175,9 +175,19 @@ public:
     }
 
     ~H5PartWriterSeq() override
+    //{
+    //    if (rank_ == 0) { H5PartWriter::closeStep(); }
+    //    MPI_Comm_free(&comm_);
+    //}
     {
         if (rank_ == 0) { H5PartWriter::closeStep(); }
-        MPI_Comm_free(&comm_);
+        if (comm_ != MPI_COMM_NULL) {
+            int finalized;
+            MPI_Finalized(&finalized);
+            if (!finalized) {
+                MPI_Comm_free(&comm_);
+            }
+        }
     }
 
     void addStep(size_t firstIndex, size_t lastIndex, std::string path) override
