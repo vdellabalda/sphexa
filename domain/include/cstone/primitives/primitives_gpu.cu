@@ -581,12 +581,14 @@ template uint64_t runLengthEncodeTempStorage<uint64_t, unsigned>(uint64_t);
 
 template<class KeyType, class IndexType, class StorageType>
 void runLengthEncodeGpu(size_t num_items, const KeyType* d_in,
-    KeyType* d_unique_out, IndexType* d_counts_out, IndexType* d_num_runs_out,
+    KeyType* d_unique_out, IndexType* d_counts_out,
     StorageType* d_temp_storage, size_t numElementsStorage)
 {
     size_t tempStorageBytes = sizeof(StorageType) * numElementsStorage;
     // Determine temporary device storage requirements
     size_t   temp_storage_bytes = 0;
+    IndexType* d_num_runs_out;
+    checkGpuErrors(cudaMalloc(&d_num_runs_out, sizeof(IndexType)));
     checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
         nullptr, temp_storage_bytes,
         d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
@@ -594,12 +596,14 @@ void runLengthEncodeGpu(size_t num_items, const KeyType* d_in,
     if (tempStorageBytes < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
     
     // Run encoding 
-    checkGpuErrors(cub::DeviceRunLengthEncode::Encode(
+    checkGpuErrors(cub::DeviceRunLengthEncode::Encode(  
         d_temp_storage, temp_storage_bytes,
         d_in, d_unique_out, d_counts_out, d_num_runs_out, num_items));
+    
+    checkGpuErrors(cudaFree(d_num_runs_out));
 }
 #define RUN_LENGTH_ENCODE_GPU_DB(KeyType, IndexType, StorageType)                                                                     \
-    template void runLengthEncodeGpu(size_t, const KeyType*, KeyType*, IndexType*, IndexType*, StorageType*, size_t)                 
+    template void runLengthEncodeGpu(size_t, const KeyType*, KeyType*, IndexType*, StorageType*, size_t)                 
 RUN_LENGTH_ENCODE_GPU_DB(unsigned, unsigned, uint64_t);
 RUN_LENGTH_ENCODE_GPU_DB(uint64_t, unsigned, uint64_t);
 RUN_LENGTH_ENCODE_GPU_DB(unsigned, unsigned, uint32_t);
