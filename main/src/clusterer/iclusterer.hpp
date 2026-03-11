@@ -162,16 +162,34 @@ protected:
         timer.logStatistics("assignment", domain.assignmentStart());
 
         auto hostMem = simData.hydro.memStats();
-        timer.logStatistics("hostMemSizeBytes", hostMem[1]);
-        timer.logStatistics("hostCapSizeBytes", hostMem[2]);
+        timer.logStatistics("hostHydroMemSizeBytes", hostMem[1]);
+        timer.logStatistics("hostHydroCapSizeBytes", hostMem[2]);
+        
+        hostMem = simData.clust.memStats();
+        timer.logStatistics("hostClustMemSizeBytes", hostMem[1]);
+        timer.logStatistics("hostClustCapSizeBytes", hostMem[2]);
+
+        hostMem = simData.halo.memStats();
+        timer.logStatistics("hostHaloMemSizeBytes", hostMem[1]);
+        timer.logStatistics("hostHaloCapSizeBytes", hostMem[2]);
 
         using AccType = ParticleDataType::AcceleratorType;
         if constexpr (cstone::HaveGpu<AccType>{})
         {
             auto devMem = simData.hydro.memStats();
-            timer.logStatistics("devMemSizeBytes", devMem[1]);
-            timer.logStatistics("devCapSizeBytes", devMem[2]);
-            timer.logStatistics("devFreeSizeBytes", devMem[3]);
+            timer.logStatistics("devHydroMemSizeBytes", devMem[1]);
+            timer.logStatistics("devHydroCapSizeBytes", devMem[2]);
+            timer.logStatistics("devHydroFreeSizeBytes", devMem[3]);
+
+            devMem = simData.clust.memStats();
+            timer.logStatistics("devClustMemSizeBytes", devMem[1]);
+            timer.logStatistics("devClustCapSizeBytes", devMem[2]);
+            timer.logStatistics("devClustFreeSizeBytes", devMem[3]);
+
+            devMem = simData.halo.memStats();
+            timer.logStatistics("devHaloMemSizeBytes", devMem[1]);
+            timer.logStatistics("devHaloCapSizeBytes", devMem[2]);
+            timer.logStatistics("devHaloFreeSizeBytes", devMem[3]);
         }
     }
 

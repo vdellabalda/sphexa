@@ -79,15 +79,28 @@ template void addGpu(unsigned*, const unsigned*, size_t);
 template void addGpu(uint64_t*, const uint64_t*, size_t);
 template void addGpu(double*, const double*, size_t);
 
-template<class T1>
-void subtractGpu(T1* in1, const T1* in2, size_t numElements)
+// Subtract N from input
+template<class T>
+struct MinusFunctor
 {
-    thrust::transform(thrust::device, in1, in1 + numElements, in2, in1, thrust::minus<T1>{});
+    const T n;
+
+    MinusFunctor(T n_)
+        : n(n_)
+    {
+    }
+
+    __host__ __device__ T operator()(const T& x) const { return x - n; }
+
+};
+
+template<class T>
+void subtractGpu(T* in, T subtract, size_t numElements)
+{
+    thrust::transform(thrust::device, in, in + numElements, in, MinusFunctor<T>(subtract));
 }
-template void subtractGpu(double*, const double*, size_t);
-template void subtractGpu(float*, const float*, size_t);
-template void subtractGpu(int*, const int*, size_t);
-template void subtractGpu(unsigned*, const unsigned*, size_t);
+template void subtractGpu(unsigned*, unsigned, size_t);
+template void subtractGpu(uint64_t*, uint64_t, size_t);
 
 template<class T, class Tf>
 void multiplyElementWiseGpu(T* first, T* last, const Tf* factors)

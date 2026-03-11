@@ -303,9 +303,13 @@ struct GreaterThan
     }
 };
 
-template<class T, class FlagType, class StorageType>
-size_t selectByThresholdGpu(const T* input, const FlagType* flags, size_t numElements, FlagType threshold, T* output, StorageType* d_temp_storage, size_t numElementsStorage)
+template<class T1, class T2, class FlagType, class StorageType>
+size_t selectByThresholdGpu(const T1* input, const FlagType* flags, size_t startElement, size_t numElements,
+        FlagType threshold, T1* output1, T2* output2, StorageType* d_temp_storage, size_t numElementsStorage)
 {
+    auto first = thrust::make_zip_iterator(thrust::make_tuple(input, thrust::make_counting_iterator<T2>(startElement)));
+    auto out = thrust::make_zip_iterator(thrust::make_tuple(output1, output2));
+    
     // Determine temporary device storage requirements
     size_t tempStorageBytes = sizeof(StorageType)*numElementsStorage;
     size_t   temp_storage_bytes = 0;
@@ -313,12 +317,12 @@ size_t selectByThresholdGpu(const T* input, const FlagType* flags, size_t numEle
     checkGpuErrors(cudaMalloc(&d_num_selected_out, sizeof(size_t)));
     checkGpuErrors(cub::DeviceSelect::FlaggedIf(
         nullptr, temp_storage_bytes,
-        input, flags, output, d_num_selected_out, numElements, GreaterThan<T>(threshold)));
+        first, flags, out, d_num_selected_out, numElements, GreaterThan<T1>(threshold)));
     if (tempStorageBytes < temp_storage_bytes) { throw std::runtime_error("temp storage too small\n"); };
     
     checkGpuErrors(cub::DeviceSelect::FlaggedIf(
         d_temp_storage, temp_storage_bytes,
-        input, flags, output, d_num_selected_out, numElements, GreaterThan<T>(threshold)));
+        first, flags, out, d_num_selected_out, numElements, GreaterThan<T1>(threshold)));
 
     size_t numSelected;
     checkGpuErrors(cudaMemcpy(&numSelected, d_num_selected_out, sizeof(size_t), cudaMemcpyDeviceToHost));
@@ -326,10 +330,10 @@ size_t selectByThresholdGpu(const T* input, const FlagType* flags, size_t numEle
     checkGpuErrors(cudaFree(d_num_selected_out));
     return numSelected;
 }
-template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, unsigned, unsigned*, uint32_t*, size_t);
-template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, unsigned, long unsigned*, uint32_t*, size_t);
-template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, unsigned, unsigned*, uint64_t*, size_t);
-template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, unsigned, long unsigned*, uint64_t*, size_t);
+template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, size_t, unsigned, unsigned*, unsigned*, uint32_t*, size_t);
+template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, size_t, unsigned, long unsigned*, long unsigned*, uint32_t*, size_t);
+template size_t selectByThresholdGpu(const unsigned*, const unsigned*, size_t, size_t, unsigned, unsigned*, unsigned*, uint64_t*, size_t);
+template size_t selectByThresholdGpu(const long unsigned*, const unsigned*, size_t, size_t, unsigned, long unsigned*, long unsigned*, uint64_t*, size_t);
 
 
 template<class IdType>

@@ -32,7 +32,7 @@ template<class T1>
 extern void addGpu(T1* in1, const T1* in2, size_t numElements);
 
 template<class T1>
-extern void subtractGpu(T1* in1, const T1* in2, size_t numElements);
+extern void subtractGpu(T1* in, T1 subtract, size_t numElements);
 
 template<class T, class Tf>
 extern void multiplyElementWiseGpu(T* first, T* last, const Tf* factors);

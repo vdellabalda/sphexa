@@ -191,6 +191,7 @@ int main(int argc, char** argv)
     if (haloProp) { clusterer->computeHaloProperties(domain, simData); }
     if (findSubclusters) { clusterer->findSubClusters(domain, simData); }
     clusterer->logTimings(domain, simData);
+
     
     Timer writeTimer(output);
     writeTimer.start();
@@ -239,7 +240,9 @@ int main(int argc, char** argv)
     }
 
     auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
-    if (profEnabled) { clusterer->writeMetrics(fileWriterSeq.get(), profFile); }
+    if (profEnabled) { 
+        clusterer->writeMetrics(fileWriterSeq.get(), profFile);
+    }
     writeTimer.step("FileOutput::performanceMetrics");
     totalTimer.step("Total execution time");
 

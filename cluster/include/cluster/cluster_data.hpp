@@ -127,12 +127,11 @@ public:
     FieldVector<ClusterKeyType>     edgeDst; // only used in CPU version
 
     /*! @brief Cluster fields */
-    FieldVector<ClusterKeyType>     uniqueKeys;
+    FieldVector<ClusterKeyType>     nonLocalKeys;
+    FieldVector<ClusterKeyType>     uniqueKeys; // only used in CPU version
     FieldVector<IdType>             localKeyCounts; // only used in CPU version
-    FieldVector<ClusterIdType>      idMap;
     FieldVector<IdType>             clusterParents; // only used in CPU version
     FieldVector<IdType>             clusterSizes; // only used in CPU version
-    FieldVector<ClusterKeyType>     nonLocalKeys;
 
     //DeviceClusterData_t<AccType> devData;
 
@@ -230,6 +229,22 @@ public:
             }
         }
         return 0;
+    }
+
+    util::array<std::size_t, 5> memStats()
+    {
+        auto        data_ = data();
+        std::size_t sumOfSize{0}, sumOfCap{0};
+        for (size_t i = 0; i < data_.size(); ++i)
+        {
+            sumOfSize +=
+                std::visit([]<class V>(V* arg) { return sizeof(typename V::value_type) * arg->size(); }, data_[i]);
+            sumOfCap +=
+                std::visit([]<class V>(V* arg) { return sizeof(typename V::value_type) * arg->capacity(); }, data_[i]);
+        }
+
+        std::size_t free{0}, total{0};
+        return {size(), sumOfSize, sumOfCap, free, total};
     }
 
     //! @brief cluster fields selected for file output
