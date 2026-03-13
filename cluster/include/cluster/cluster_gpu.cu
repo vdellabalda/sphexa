@@ -515,31 +515,24 @@ __host__ void computeGlobalClusterIdGPU(
     LocalIndex nHaloEnd = nHalo - nHaloStart;
 
     size_t numClusteredHaloStart = cstone::reduceGpu(rawPtr(c.flagged), nHaloStart, size_t(0));
-    size_t numClusteredHaloEnd = cstone::reduceGpu(rawPtr(c.flagged)+nHaloStart+nLocal,
-                                nHaloEnd, size_t(0));        
+    size_t numClusteredHaloEnd = cstone::reduceGpu(rawPtr(c.flagged)+nHaloStart+nLocal, nHaloEnd, size_t(0));        
     
     // edges for union-find
     EdgeType* edges = reinterpret_cast<EdgeType*>(rawPtr(c.scratchBuf));
-    //c.edges.resize(numClusteredHaloStart + numClusteredHaloEnd);
-    cstone::fillGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+domain.nParticlesWithHalos(), ClusterIdType(0));
-    memcpyD2D(rawPtr(c.flagged), nHaloStart, rawPtr(c.idBuf));
-    memcpyD2D(rawPtr(c.flagged)+nHaloStart+nLocal, nHaloEnd, rawPtr(c.idBuf)+nHaloStart+nLocal);
+    memcpyD2D(rawPtr(c.flagged), domain.nParticlesWithHalos(), rawPtr(c.idBuf));
+    cstone::fillGpu(rawPtr(c.idBuf)+nHaloStart, rawPtr(c.idBuf)+nHaloStart+nLocal, ClusterIdType(0));
     cstone::exclusiveScanGpu(rawPtr(c.idBuf), rawPtr(c.idBuf)+domain.nParticlesWithHalos(), rawPtr(c.idBuf));
     unsigned numBlocks  = (nHalo + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    // Could do the followign only using exclusive scan. For a halo particle which is clustered, the prior exclusive scan
-    // value is not equal, i.e. if exScan[i-1]==exScan[i] -> no edge[i].
-    // => If I manage to do clusterRemapping later without c.flagged, I can do exScan in place.
     constructEdgesGpu<<<numBlocks, numThreads>>>(
-        rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), rawPtr(c.flagged), rawPtr(c.idBuf),
-        nHaloStart, edges, nHalo, nLocal, myRank);
-
+        rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), rawPtr(c.flagged), rawPtr(c.idBuf), nHaloStart, edges, nHalo, nLocal, myRank);
     cstone::sortGpu(edges, edges+numClusteredHaloStart+numClusteredHaloEnd);    
     EdgeType* newEdgesEnd = cstone::uniqueGpu(edges, edges+numClusteredHaloStart+numClusteredHaloEnd);
     size_t numUniqueEdges = newEdgesEnd-edges;
     size_t doubledNumUniqueEdges = 2*numUniqueEdges;
     numBlocks  = (numUniqueEdges + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
+    // flatten edges for sending
     flattenEdgesGpu<<<numBlocks, numThreads>>>(edges, numUniqueEdges, rawPtr(c.keyBuf));
 
     // Allgather of edges
@@ -552,14 +545,13 @@ __host__ void computeGlobalClusterIdGPU(
         displs[i] = displs[i - 1] + recvCounts[i - 1];  
     int totalCount = displs.back() + recvCounts.back();
     ClusterKeyType* uniqueKeys = reinterpret_cast<ClusterKeyType*>(rawPtr(c.scratchBuf));
-    totalCount /= 2;
-    
+    totalCount /= 2;    
     mpiAllgathervGpuDirect<true>(rawPtr(c.keyBuf), doubledNumUniqueEdges, uniqueKeys, recvCounts.data(), displs.data(), MPI_COMM_WORLD);
 
+    // Find unique global edges
     numBlocks = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
     splitEdgesGpu<<<numBlocks, numThreads>>>(uniqueKeys, totalCount, rawPtr(c.keyBuf), rawPtr(c.keyBuf)+totalCount);
-
     cstone::sortGpu(uniqueKeys, uniqueKeys+2*totalCount);
     ClusterKeyType* newKeysEnd = cstone::uniqueGpu(uniqueKeys, uniqueKeys+2*totalCount);
     size_t numUniqueEdgeKeys = newKeysEnd - uniqueKeys;
@@ -567,7 +559,6 @@ __host__ void computeGlobalClusterIdGPU(
     // perform union-find on edges
     ClusterIdType* clusterParents = rawPtr(c.idBuf);
     cstone::sequenceGpu(clusterParents, numUniqueEdgeKeys, ClusterIdType(0));
-
     numBlocks  = (totalCount + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;                    
     unionFindGpu<<<numBlocks, numThreads>>>(clusterParents, rawPtr(c.keyBuf), rawPtr(c.keyBuf)+totalCount, uniqueKeys, totalCount, numUniqueEdgeKeys);
@@ -652,21 +643,18 @@ __host__ void computeCompactClusterIdGPU(
     unsigned numThreads = 256;
     unsigned numBlocks = (domain.nParticles() + numThreads - 1) / numThreads;
     if (numBlocks < 1) numBlocks = 1;
-    // Do I actually need c.flagged here? 
     // If first iteration, FOF groups,  if second iteration, subfind groups.
     if (c.firstIter)
     {
-        directClusterRemapping<<<numBlocks, numThreads>>>(
-        rawPtr(c.globalClusterKeys)+domain.startIndex(), rawPtr(c.halo_id)+domain.startIndex(), rawPtr(c.flagged)+domain.startIndex(),
-        uniqueKeys, idMap, domain.nParticles(), numUniqueKeys);
+        clusterRemapping<<<numBlocks, numThreads>>>(
+        rawPtr(c.globalClusterKeys)+domain.startIndex(), rawPtr(c.halo_id)+domain.startIndex(), uniqueKeys, idMap, domain.nParticles(), numUniqueKeys);
         memcpyD2D(rawPtr(c.halo_id)+domain.startIndex(), numParticles, rawPtr(c.localClusterIds)+domain.startIndex());
         c.firstIter = false;
     }
     else
     {
-        directClusterRemapping<<<numBlocks, numThreads>>>(
-        rawPtr(c.globalClusterKeys)+domain.startIndex(), rawPtr(c.sub_id)+domain.startIndex(), rawPtr(c.flagged)+domain.startIndex(),
-        uniqueKeys, idMap, domain.nParticles(), numUniqueKeys);
+        clusterRemapping<<<numBlocks, numThreads>>>(
+        rawPtr(c.globalClusterKeys)+domain.startIndex(), rawPtr(c.sub_id)+domain.startIndex(), uniqueKeys, idMap, domain.nParticles(), numUniqueKeys);
         memcpyD2D(rawPtr(c.sub_id)+domain.startIndex(), numParticles, rawPtr(c.localClusterIds)+domain.startIndex());
         c.firstIter = true;
     }

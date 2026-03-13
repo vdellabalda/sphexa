@@ -16,64 +16,42 @@ namespace cluster
 {
 using namespace binary_search;
 
-template<class ValueType>
-struct thresholdMaskFunctor
+template<class KeyType, class IndexType>
+HOST_DEVICE_FUN KeyType key32ToKey64(const IndexType& localId, int rank)
 {
-    ValueType _threshold;
-    thresholdMaskFunctor(ValueType threshold) : _threshold(threshold) { }
-
-    __host__ __device__ bool operator()(const ValueType& x) const
-    {
-        return x >= _threshold;
-    }
-};
-
-
-template<class ValueType, class FlagType>
-void thresholdMaskGpu(const ValueType* first, const ValueType* last, FlagType* mask, ValueType threshold)
-{
-    thrust::transform(thrust::device, first, last, mask, thresholdMaskFunctor(threshold));
+    return ((static_cast<KeyType>(rank) << 32) | static_cast<KeyType>(localId));
 }
-
-template void thresholdMaskGpu(const uint32_t*, const uint32_t*, bool*, const uint32_t);
+template uint64_t key32ToKey64(const uint32_t&, int);
+template uint64_t key32ToKey64(const uint64_t&, int);
 
 
 template<class KeyType, class IndexType>
 struct key32ToKey64Functor
 {
-    IndexType rank;
+    int rank;
 
-    key32ToKey64Functor(IndexType rank_)
+    key32ToKey64Functor(int rank_)
         : rank(rank_)
     {}
 
     __host__ __device__ KeyType operator()(const IndexType& localId) const
     {
-        return ((static_cast<KeyType>(rank) << 32) | static_cast<KeyType>(localId));
-    };
+        return key32ToKey64<KeyType, IndexType>(localId, rank);
+    }
 };
 
 template<class IndexType, class KeyType>
-void transformLocalToGlobalClusterKeys(
-    const IndexType* localClusterIds,
-    KeyType* globalClusterKeys,
-    size_t n,
-    int rank
-)
+void transformLocalToGlobalClusterKeys(const IndexType* localClusterIds, KeyType* globalClusterKeys, size_t n, int rank)
 {   
     thrust::transform(thrust::device, localClusterIds, localClusterIds+n, globalClusterKeys,
         key32ToKey64Functor<KeyType, IndexType>(rank)); 
 }
 template void transformLocalToGlobalClusterKeys(const uint32_t*, uint64_t*, size_t, int);
+template void transformLocalToGlobalClusterKeys(const uint64_t*, uint64_t*, size_t, int);
 
 
 template<class KeyType, class IndexType>
-__global__ void clusterKeyUpdate(
-    KeyType* globalKeys,
-    const KeyType* uniqueKeys,
-    const IndexType* clusterParents,
-    size_t numKeys,
-    size_t numParticles)
+__global__ void clusterKeyUpdate(KeyType* globalKeys, const KeyType* uniqueKeys, const IndexType* clusterParents, size_t numKeys, size_t numParticles)
 {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numParticles) return;
@@ -102,7 +80,7 @@ __global__ void constructEdgesGpu(const IdType* localClusterIds, const KeyType* 
     unsigned edgeIdx = compactIndex[idx];
     
     IdType localId = localClusterIds[idx];
-    KeyType localKey = ((static_cast<KeyType>(rank) << 32) | static_cast<KeyType>(localId));
+    KeyType localKey = key32ToKey64<KeyType, IdType>(localId, rank);
 
     if (localKey < globalClusterKeys[idx])
     {
@@ -139,11 +117,7 @@ __global__ void splitEdgesGpu(KeyType* flatEdges, size_t n, KeyType* edgeSrc, Ke
 
 
 template<class ClusterKeyType, class IdType>
-__global__ void computeClusterOwnershipGpu(
-    const ClusterKeyType* uniqueKeys,
-    IdType* ownership,
-    size_t numUniqueKeys
-)
+__global__ void computeClusterOwnershipGpu(const ClusterKeyType* uniqueKeys, IdType* ownership, size_t numUniqueKeys)
 {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numUniqueKeys) {return;}
@@ -154,111 +128,44 @@ __global__ void computeClusterOwnershipGpu(
 
 // Cluster remapping with binary search
 template<class ClusterKeyType, class ClusterIdType>
-__global__ void directClusterRemapping(
-    const ClusterKeyType* globalClusterKeys,
-    ClusterIdType* finalClusterIds,
-    const ClusterIdType* selectFlags,
-    const ClusterKeyType* sortedKeys,
-    const ClusterIdType* sortedIds,
-    size_t numParticles,
-    size_t numSortedKeys)
+__global__ void clusterRemapping(const ClusterKeyType* globalClusterKeys, ClusterIdType* finalClusterIds,
+    const ClusterKeyType* sortedKeys, const ClusterIdType* sortedIds, size_t numParticles, size_t numSortedKeys)
 {
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= numParticles) return;
-    if (selectFlags[tid] == 0) 
-        {
-            finalClusterIds[tid] = 0;
-            return;
-        }
 
-    ClusterKeyType myKey = globalClusterKeys[tid];
-    size_t left = 0, right = numSortedKeys;
-    bool found = false;
-    ClusterIdType compactId = 0;
-    size_t mid;
-    ClusterKeyType midKey;
-    
-    while (left < right) {
-        mid = (left + right) / 2;
-        midKey = sortedKeys[mid];
-        
-        if (midKey == myKey) {
-            compactId = sortedIds[mid];
-            found = true;
-            break;
-        } else if (midKey < myKey) {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-    
-    finalClusterIds[tid] = compactId;
+    util::tuple<bool, ClusterIdType> searchResult = binarySearch(globalClusterKeys[tid], sortedKeys, numSortedKeys);
+    bool found = get<0>(searchResult);
+    ClusterIdType compactId = get<1>(searchResult);
+    finalClusterIds[tid] = found ? sortedIds[compactId] : 0;
 }
 
 
 template<class KeyType, class ValueType>
 std::pair<KeyType*, ValueType*> setIntersectionByKeyGpu(
-    KeyType* keysFirst1,
-    size_t numKeys1,
-    KeyType* keysFirst2,
-    size_t numKeys2,
-    ValueType* valuesFirst,
-    KeyType* keysOut,
-    ValueType* valuesOut
+    KeyType* keysFirst1, size_t numKeys1, KeyType* keysFirst2, size_t numKeys2, ValueType* valuesFirst, KeyType* keysOut, ValueType* valuesOut
 )
 {
     std::pair<KeyType*, ValueType*> new_end = thrust::set_intersection_by_key(
-        thrust::device,
-        keysFirst1, keysFirst1 + numKeys1,
-        keysFirst2, keysFirst2 + numKeys2,
-        valuesFirst,
-        keysOut,
-        valuesOut);
+        thrust::device, keysFirst1, keysFirst1 + numKeys1, keysFirst2, keysFirst2 + numKeys2, valuesFirst, keysOut, valuesOut);
     return new_end;
 }
 template std::pair<uint64_t*, uint32_t*> setIntersectionByKeyGpu(
-    uint64_t*,
-    size_t,
-    uint64_t*,
-    size_t,
-    uint32_t*,
-    uint64_t*,
-    uint32_t*
+    uint64_t*, size_t, uint64_t*, size_t, uint32_t*, uint64_t*, uint32_t*
 );
 
 
 template<class KeyType, class ValueType>
 std::pair<KeyType*, ValueType*> setDifferenceByKeyGpu(
-    KeyType* keysFirst1,
-    size_t numKeys1,
-    KeyType* keysFirst2,
-    size_t numKeys2,
-    ValueType* valuesFirst1,
-    ValueType* valuesFirst2,
-    KeyType* keysOut,
-    ValueType* valuesOut
+    KeyType* keysFirst1, size_t numKeys1, KeyType* keysFirst2, size_t numKeys2, ValueType* valuesFirst1, ValueType* valuesFirst2, KeyType* keysOut, ValueType* valuesOut
 )
 {
     std::pair<KeyType*, ValueType*> new_end = thrust::set_difference_by_key(
-        thrust::device,
-        keysFirst1, keysFirst1 + numKeys1,
-        keysFirst2, keysFirst2 + numKeys2,
-        valuesFirst1,
-        valuesFirst2,
-        keysOut,
-        valuesOut);
+        thrust::device, keysFirst1, keysFirst1 + numKeys1, keysFirst2, keysFirst2 + numKeys2, valuesFirst1, valuesFirst2, keysOut, valuesOut);
     return new_end;
 }
 template std::pair<uint64_t*, uint32_t*> setDifferenceByKeyGpu(
-    uint64_t*,
-    size_t,
-    uint64_t*,
-    size_t,
-    uint32_t*,
-    uint32_t*,
-    uint64_t*,
-    uint32_t*
+    uint64_t*, size_t, uint64_t*, size_t, uint32_t*, uint32_t*, uint64_t*, uint32_t*
 );
 
 template<class KeyType, class ValueType>
@@ -440,10 +347,7 @@ struct MultipleSequenceFunctor
 };
 
 template<class IndexType>
-void multiSequenceGpu(const IndexType* lengths, 
-                                     size_t numSequences,
-                                     IndexType* output,
-                                     size_t totalElements)
+void multiSequenceGpu(const IndexType* lengths, size_t numSequences, IndexType* output, size_t totalElements)
 {
     // Create offsets array
     cstone::DeviceVector<IndexType> d_offsets(numSequences + 1);
@@ -459,10 +363,8 @@ void multiSequenceGpu(const IndexType* lengths,
 
 template<class KeyType, class ValueType, class IndexType>
 void segmentedSortGpu(
-    KeyType* d_keys_in, ValueType* d_values_in,
-    size_t totalElements,
-    const IndexType* d_offsets, size_t num_segments,
-    KeyType* d_keys_buf, ValueType* d_values_buf
+    KeyType* d_keys_in, ValueType* d_values_in, size_t totalElements,
+    const IndexType* d_offsets, size_t num_segments, KeyType* d_keys_buf, ValueType* d_values_buf
 )
 {
     // Create a set of DoubleBuffers to wrap pairs of device pointers
