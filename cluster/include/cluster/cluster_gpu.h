@@ -59,7 +59,7 @@ namespace cluster
         const cstone::Box<typename ParticleDataset::RealType>& box);
 
     template<class ParticleDataset, class ClusterDataset>
-    void computeDensityGroupsGPU(
+    void computeLocalDensityGroupsGPU(
         const cstone::GroupView& grp,
         ParticleDataset& d,
         ClusterDataset& c,
