@@ -65,7 +65,7 @@ int main(int argc, char** argv)
     // Clustering parameters
     const double             b                        = parser.get("--percolation-factor", 0.2);
     const double             percolationLengthDefault = parser.get("--percolation-length", 0.0);
-    const float              mergeFactor              = parser.get("--merge-factor", 0.3f);
+    const float              mergeFactor              = parser.get("--merge-factor", 0.5f);
     const int                clusterThreshold         = parser.get("--cluster-threshold", 64);
     const bool               haloProp                 = parser.exists("--halo-prop");
     const bool               findSubclusters          = parser.exists("--subcluster");
@@ -102,6 +102,7 @@ int main(int argc, char** argv)
 
     // Create propagator
     std::string propChoice = "nbody"; // dummy propagator for loading data, not used for actual time integration
+    if (findSubclusters) { propChoice = "ve"; }
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
 
     Dataset simData;
@@ -269,11 +270,19 @@ void printHelp(char* name, int rank)
         printf("  --percolation-factor NUM\tPercolation factor for automatic length calculation [0.2]\n");
         printf("  --percolation-length NUM\tFixed percolation length (overrides factor calculation) [auto]\n");
         printf("  --cluster-threshold NUM\tMinimum particles per cluster [64]\n\n");
+
+        printf("Subclustering Options:\n");
+        printf("  --subcluster\t\tEnable subclustering of halos\n");
+        printf("  --merge-factor NUM\tMerge factor for subcluster merging (0-1) [0.5]\n\n");
+
+        printf("Property Options:\n");
+        printf("  --halo-prop\t\tCompute halo properties (mass, center of mass, velocity, etc.)\n\n");
         
         printf("Output Options:\n");
         printf("  -o FILE\t\tOutput file name [clusters_INPUT_FILE]\n");
         printf("  --ascii\t\tWrite ASCII format instead of HDF5 [binary HDF5]\n");
         printf("  -f LIST\t\tComma-separated list of fields to write [x,y,z,h,m,halo_id]\n\n");
+        printf("  --sort-by-cluster\tSort particles by cluster ID in output\n\n");
         
         printf("General Options:\n");
         printf("  --quiet\t\tSuppress output messages\n");
