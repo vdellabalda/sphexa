@@ -5,14 +5,14 @@
 namespace cluster
 {
 template<class ParticleDataset, class ClusterDataset, class T>
-void computeDensityGroups(
+void computeLocalDensityGroups(
     const cstone::GroupView& grp,
     ParticleDataset& d, ClusterDataset& c,
     const cstone::Box<T>& box
 )
 {
     if constexpr (cstone::HaveGpu<typename ParticleDataset::AcceleratorType>{})
-        { computeDensityGroupsGPU(grp, d, c, box); }
-    else { printf("computeDensityGroups not implemented for CPU\n"); }
+        { computeLocalDensityGroupsGPU(grp, d, c, box); }
+    else { printf("computeLocalDensityGroups not implemented for CPU\n"); }
 }
 }

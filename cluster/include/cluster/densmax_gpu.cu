@@ -80,7 +80,7 @@ __global__ void densestFOFNeighborGPU(
 
 
 template<class ParticleDataset, class ClusterDataSet>
-void computeDensityGroupsGPU(
+void computeLocalDensityGroupsGPU(
     const cstone::GroupView& grp,
     ParticleDataset& d, ClusterDataSet& c,
     const cstone::Box<typename ParticleDataset::RealType>& box)
@@ -136,10 +136,62 @@ void computeDensityGroupsGPU(
     transformLocalToGlobalClusterKeys(rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), c.numParticlesHalos, myRank);
     checkGpuErrors(cudaGetLastError());    
 }
-template void computeDensityGroupsGPU(
+template void computeLocalDensityGroupsGPU(
     const cstone::GroupView& grp, sphexa::ParticlesData<cstone::GpuTag>& d,
     cluster::ClusterData<cstone::GpuTag>& c,
     const cstone::Box<sph::SphTypes::CoordinateType>& box);
 
 
+template<class ParticleDataset, class ClusterDataSet>
+void computeGlobalDensityGroupsGPU(
+    const cstone::GroupView& grp,
+    ParticleDataset& d, ClusterDataSet& c,
+    const cstone::Box<typename ParticleDataset::RealType>& box)
+{
+    printf("computeGlobalDensityGroups not implemented for GPU\n");
+}
+template void computeGlobalDensityGroupsGPU(
+    const cstone::GroupView& grp, sphexa::ParticlesData<cstone::GpuTag>& d,
+    cluster::ClusterData<cstone::GpuTag>& c,
+    const cstone::Box<sph::SphTypes::CoordinateType>& box);
+
+
+template<class ParticleDataset, class ClusterDataSet>
+void computeDensitySaddlesGPU(
+    const cstone::GroupView& grp,
+    ParticleDataset& d, ClusterDataSet& c,
+    const cstone::Box<typename ParticleDataset::RealType>& box)
+{
+    int myRank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myRank);
+
+    size_t numParticles = grp.lastBody - grp.firstBody;
+    unsigned ng0 = 40;
+    unsigned ngmax = 80;
+    auto [traversalPool, nidxPool] = cstone::allocateNcStacks(d.traversalStack, ngmax);
+
+    cstone::sequenceGpu(rawPtr(c.idBuf), c.numParticlesHalos, ClusterIdType(0));
+
+    cstone::resetTraversalCounters<<<1, 1>>>();
+    unsigned numThreads = 128;
+    unsigned numBlocks = (numParticles + numThreads - 1) / numThreads;
+    if (numBlocks < 1) numBlocks = 1;
+    densitySaddlesGPU<<<numBlocks, numThreads>>>(
+        grp.groupStart, grp.groupEnd, grp.numGroups,
+        d.treeView, box, rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight),
+        rawPtr(d.rho), rawPtr(c.halo_id), rawPtr(c.localClusterIds), rawPtr(d.nc), ngmax,
+        c.mergeFactor, rawPtr(c.idBuf), c.numParticlesHalos, nidxPool, traversalPool
+    );
+    checkGpuErrors(cudaGetLastError());
+
+    updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.idBuf), c.numParticlesHalos);
+    checkGpuErrors(cudaGetLastError());
+
+    // Update c.localClusterIds to reflect merged zones
+    updateIdGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), rawPtr(c.idBuf), c.numParticlesHalos);
+    checkGpuErrors(cudaGetLastError());
+    
+    transformLocalToGlobalClusterKeys(rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), c.numParticlesHalos, myRank);
+    checkGpuErrors(cudaGetLastError());
+}
 } // namespace cluster
