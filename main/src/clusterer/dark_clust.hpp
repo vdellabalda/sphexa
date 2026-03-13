@@ -81,10 +81,6 @@ public:
         auto&h = simData.halo;
         h.setDependent("cId", "globalSize", "cMass", "xCenter", "yCenter", "zCenter", "xVelocity", "yVelocity", "zVelocity",
             "localSize", "localOffset", "globalOffset");
-
-        auto& d = simData.hydro;
-        d.setConserved("vx", "vy", "vz", "id");
-        d.setDependent("ax", "ay", "az", "du", "du_m1");
     }
     
     void sync(DomainType& domain, ParticleDataType& simData) override
@@ -163,7 +159,7 @@ public:
         timer.step("FindNeighbors::subcluster");
         pmReader.step();
         
-        release(d, "du");
+        release(d, "az");
         acquire(d, "rho");
         computeDensity(groups_.view(), d, domain.box());
         timer.step("Density::subcluster");
@@ -172,8 +168,8 @@ public:
         domain.exchangeHalos(std::tie(get<"rho">(d), get<"halo_id">(c)), get<"keys">(d), get<"keyBuf">(c));
         timer.step("mpi::synchronizeHalos");
 
-        computeDensityGroups(groups_.view(), d, c, domain.box());
-        timer.step("DensityGroups::subcluster");
+        computeLocalDensityGroups(groups_.view(), d, c, domain.box());
+        timer.step("LocalDensityGroups::subcluster");
         pmReader.step();
         release(d, "rho");
 
