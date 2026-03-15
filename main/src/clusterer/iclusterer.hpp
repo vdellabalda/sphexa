@@ -151,7 +151,7 @@ protected:
                 std::cout << d.fieldNames[indicesDone.back()] << std::endl;
             }
         };
-        output(simData.hydro, writer);
+        //output(simData.hydro, writer);
         output(simData.clust, writer);
     }
 
