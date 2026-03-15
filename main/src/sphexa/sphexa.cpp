@@ -207,7 +207,7 @@ int main(int argc, char** argv)
     }
 
     size_t startIteration    = d.iteration;
-    bool   isOutputTriggered = true;
+    bool   isOutputTriggered = false;
     
     for (bool keepRunning = true; keepRunning; d.iteration++)
     {
@@ -215,6 +215,7 @@ int main(int argc, char** argv)
 
         propagator->computeForces(domain, simData);
         box = domain.box();
+
         if (findClusters) { 
             clusterer->findClusters(domain, simData);
             if (haloProp) { clusterer->computeHaloProperties(domain, simData); }
@@ -235,8 +236,6 @@ int main(int argc, char** argv)
              (isWallClockReached && writeEnabled) || isOutputTriggered) &&
             d.iteration > startIteration;
 
-        //isOutputTriggered = true;
-
         if (isOutputTriggered && propagator->isSynced())
         {
             fileWriter->addStep(domain.startIndex(), domain.endIndex(), outFile);
@@ -244,15 +243,10 @@ int main(int argc, char** argv)
             box.loadOrStore(fileWriter.get());
             propagator->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
             propagator->save(fileWriter.get());
-            fileWriter->closeStep();
 
             if (findClusters)
             {
-                fileWriter->addStep(domain.startIndex(), domain.endIndex(), clustOutFile);
-                simData.clust.loadOrStoreAttributes(fileWriter.get());
                 clusterer->saveFields(fileWriter.get(), domain.startIndex(), domain.endIndex(), simData, box);
-                clusterer->save(fileWriter.get());
-                fileWriter->closeStep();
 
                 if (rank == 0 && haloProp)
                 {
@@ -275,9 +269,12 @@ int main(int argc, char** argv)
                     hdf5Writer.writeParticles(outFieldNames, hostData, clusterInfos);
                     hdf5Writer.writeClusterMetadata(clusterInfos);
                     hdf5Writer.close();   
-                }           
+                }
+                
+                clusterer->logTimings(domain, simData);
             }
 
+            fileWriter->closeStep();
 
             isOutputTriggered = false;
         }
@@ -295,6 +292,7 @@ int main(int argc, char** argv)
         {
             auto fileWriterSeq = fileWriterFactory(ascii, MPI_COMM_WORLD, true);
             if (profEnabled) { propagator->writeMetrics(fileWriterSeq.get(), profFile); }
+            if (findClusters && profEnabled) { clusterer->writeMetrics(fileWriterSeq.get(), profFile+"cluster"); }
         }
 
     }
