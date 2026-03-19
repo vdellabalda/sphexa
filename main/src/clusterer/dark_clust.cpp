@@ -8,6 +8,7 @@
 #include "sph/types.hpp"
 #include "clusterer.h"
 #include "dark_clust.hpp"
+#include "dark_clust_dense.hpp"
 
 namespace sphexa
 {
@@ -19,6 +20,14 @@ ClustLib<DomainType, ParticleDataType>::makeDarkClust(std::ostream& output, size
     if (subCluster) { return std::make_unique<darkClust<true, DomainType, ParticleDataType>>(output, rank); }
     else { return std::make_unique<darkClust<false, DomainType, ParticleDataType>>(output, rank); }
 
+}
+
+template<class DomainType, class ParticleDataType>
+std::unique_ptr<Clusterer<DomainType, ParticleDataType>>
+ClustLib<DomainType, ParticleDataType>::makeDarkClustDens(std::ostream& output, size_t rank, bool subCluster)
+{
+    if (subCluster) { return std::make_unique<darkClustDens<true, DomainType, ParticleDataType>>(output, rank); }
+    else { return std::make_unique<darkClustDens<false, DomainType, ParticleDataType>>(output, rank); }
 }
 
 #ifdef USE_CUDA

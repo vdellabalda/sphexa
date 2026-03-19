@@ -22,6 +22,7 @@ struct ClustLib
     using ClustPtr = std::unique_ptr<Clusterer<DomainType, ParticleDataType>>;
 
     static ClustPtr makeDarkClust(std::ostream& output, size_t rank, bool avClean);
+    static ClustPtr makeDarkClustDens(std::ostream& output, size_t rank, bool avClean);
 };
 
 } // namespace sphexa

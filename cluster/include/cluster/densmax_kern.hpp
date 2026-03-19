@@ -50,4 +50,25 @@ HOST_DEVICE_FUN inline IdType densestFOFNeighborLoop(
 
     return densestNeighbor;
 }
+
+template<size_t stride = 1, class IdType, class Tm>
+HOST_DEVICE_FUN inline IdType densestNeighborLoop(
+    IdType i, const IdType* neighbors, unsigned neighborsCount, const Tm* rho)
+{
+    auto rhoi = rho[i];
+    IdType densestNeighbor = i;
+
+    for (unsigned pj = 0; pj < neighborsCount; ++pj)
+    {
+        IdType j = neighbors[stride * pj];
+        if (rho[j] > rhoi)
+        {
+            rhoi = rho[j];
+            densestNeighbor = j;
+        }
+    }
+
+    return densestNeighbor;
+}
+
 }

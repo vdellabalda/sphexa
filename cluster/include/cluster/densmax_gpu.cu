@@ -78,6 +78,61 @@ __global__ void densestFOFNeighborGPU(
     }
 }
 
+template<class IdType, class KeyType, class Tc, class Th, class Tm>
+__global__ void densestNeighborGPU(
+        const LocalIndex* grpStart, const LocalIndex* grpEnd, LocalIndex numGroups,
+        const cstone::OctreeNsView<Tc, KeyType> tree, const cstone::Box<Tc> box,
+        unsigned ng0, unsigned ngmax, const Tc* x, const Tc* y, const Tc* z,
+        Th* h, Tm* rho, IdType* parent,
+        LocalIndex* nidx, TreeNodeIndex* globalPool
+    )
+{
+    unsigned laneIdx     = threadIdx.x & (GpuConfig::warpSize - 1);
+    unsigned targetIdx   = 0;
+    unsigned warpIdxGrid = (blockDim.x * blockIdx.x + threadIdx.x) >> GpuConfig::warpSizeLog2;
+
+    LocalIndex* neighborsWarp = nidx + ngmax * TravConfig::targetSize * warpIdxGrid;
+
+    while (true)
+    {
+        // first thread in warp grabs next target
+        if (laneIdx == 0) { targetIdx = atomicAdd(&cstone::targetCounterGlob, 1); }
+        targetIdx = cstone::shflSync(targetIdx, 0);
+
+        if (targetIdx >= numGroups) return;
+
+        LocalIndex bodyBegin = grpStart[targetIdx];
+        LocalIndex bodyEnd   = grpEnd[targetIdx];
+        LocalIndex i         = bodyBegin + laneIdx;
+
+        unsigned ncSph =
+            1 + traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, neighborsWarp, ngmax, globalPool)[0];
+
+        constexpr int ncMaxIteration = 9;
+            for (int ncIt = 0; ncIt <= ncMaxIteration; ++ncIt)
+            {
+                bool repeat = (ncSph < ng0 / 4 || (ncSph - 1) > ngmax) && i < bodyEnd;
+                if (!cstone::ballotSync(repeat)) { break; }
+                if (repeat) { h[i] = sph::updateH(ng0, ncSph, h[i]); }
+                ncSph =
+                    1 + traverseNeighbors(bodyBegin, bodyEnd, x, y, z, h, tree, box, neighborsWarp, ngmax, globalPool)[0];
+
+                bool ncFail = (ncSph < ng0 / 4 || (ncSph - 1) > ngmax) && i < bodyEnd;
+                if (ncIt == ncMaxIteration && ncFail) 
+                { 
+                    printf("Warning: particle %u has nc=%u after %d iterations.\n", i, ncSph-1, ncIt);
+                    ncSph = 1; 
+                }
+            }
+
+        if (i >= bodyEnd) continue;
+            
+        auto ncCapped = stl::min(ncSph - 1, ngmax);
+        //nc[i] = ncCapped;
+        parent[i] = densestNeighborLoop<TravConfig::targetSize>(i, neighborsWarp + laneIdx, ncCapped, rho);
+    }
+}
+
 
 template<class ParticleDataset, class ClusterDataSet>
 void computeLocalDensityGroupsGPU(
@@ -100,9 +155,15 @@ void computeLocalDensityGroupsGPU(
     cstone::scaleGpu(rawPtr(d.h)+grp.firstBody, rawPtr(d.h)+grp.lastBody, rawPtr(c.hTight)+grp.firstBody, ngfac);
     cstone::sequenceGpu(rawPtr(c.localClusterIds), c.numParticlesHalos, unsigned(0));
     
-    densestFOFNeighborGPU<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
+    //densestFOFNeighborGPU<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
+    //    grp.groupStart, grp.groupEnd, grp.numGroups, d.treeView, box, ng0, ngmax,
+    //    rawPtr(c.halo_id), rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight), rawPtr(d.rho),
+    //    rawPtr(c.localClusterIds), nidxPool, traversalPool);
+    //checkGpuErrors(cudaGetLastError());
+
+    densestNeighborGPU<<<TravConfig::numBlocks(), TravConfig::numThreads>>>(
         grp.groupStart, grp.groupEnd, grp.numGroups, d.treeView, box, ng0, ngmax,
-        rawPtr(c.halo_id), rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight), rawPtr(d.rho),
+        rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight), rawPtr(d.rho),
         rawPtr(c.localClusterIds), nidxPool, traversalPool);
     checkGpuErrors(cudaGetLastError());
 
@@ -113,25 +174,25 @@ void computeLocalDensityGroupsGPU(
     updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), c.numParticlesHalos);
     checkGpuErrors(cudaGetLastError());
 
-    cstone::sequenceGpu(rawPtr(c.idBuf), c.numParticlesHalos, ClusterIdType(0));
-
-    cstone::resetTraversalCounters<<<1, 1>>>();
-    numBlocks = (numParticles + numThreads - 1) / numThreads;
-    if (numBlocks < 1) numBlocks = 1;
-    densitySaddlesGPU<<<numBlocks, numThreads>>>(
-        grp.groupStart, grp.groupEnd, grp.numGroups,
-        d.treeView, box, rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight),
-        rawPtr(d.rho), rawPtr(c.halo_id), rawPtr(c.localClusterIds), rawPtr(d.nc), ngmax,
-        c.mergeFactor, rawPtr(c.idBuf), c.numParticlesHalos, nidxPool, traversalPool
-    );
-    checkGpuErrors(cudaGetLastError());
-
-    updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.idBuf), c.numParticlesHalos);
-    checkGpuErrors(cudaGetLastError());
-
-    // Update c.localClusterIds to reflect merged zones
-    updateIdGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), rawPtr(c.idBuf), c.numParticlesHalos);
-    checkGpuErrors(cudaGetLastError());
+    //cstone::sequenceGpu(rawPtr(c.idBuf), c.numParticlesHalos, ClusterIdType(0));
+//
+    //cstone::resetTraversalCounters<<<1, 1>>>();
+    //numBlocks = (numParticles + numThreads - 1) / numThreads;
+    //if (numBlocks < 1) numBlocks = 1;
+    //densitySaddlesGPU<<<numBlocks, numThreads>>>(
+    //    grp.groupStart, grp.groupEnd, grp.numGroups,
+    //    d.treeView, box, rawPtr(d.x), rawPtr(d.y), rawPtr(d.z), rawPtr(c.hTight),
+    //    rawPtr(d.rho), rawPtr(c.halo_id), rawPtr(c.localClusterIds), rawPtr(d.nc), ngmax,
+    //    c.mergeFactor, rawPtr(c.idBuf), c.numParticlesHalos, nidxPool, traversalPool
+    //);
+    //checkGpuErrors(cudaGetLastError());
+//
+    //updateRootGPU<<<numBlocks, numThreads>>>(rawPtr(c.idBuf), c.numParticlesHalos);
+    //checkGpuErrors(cudaGetLastError());
+//
+    //// Update c.localClusterIds to reflect merged zones
+    //updateIdGPU<<<numBlocks, numThreads>>>(rawPtr(c.localClusterIds), rawPtr(c.idBuf), c.numParticlesHalos);
+    //checkGpuErrors(cudaGetLastError());
     
     transformLocalToGlobalClusterKeys(rawPtr(c.localClusterIds), rawPtr(c.globalClusterKeys), c.numParticlesHalos, myRank);
     checkGpuErrors(cudaGetLastError());    

@@ -70,7 +70,7 @@ int main(int argc, char** argv)
     const bool               haloProp                 = parser.exists("--halo-prop");
     const bool               findSubclusters          = parser.exists("--subcluster");
     const bool               sortByCluster            = parser.exists("--sort-by-cluster");
-    const std::string        clustChoice              = "dark";
+    const std::string        clustChoice              = parser.get("--clusterer", std::string("dark"));
 
     if (findSubclusters && numRanks > 1) {
         if (rank == 0) std::cerr << "Error: Subclustering is not supported in parallel yet\n";
@@ -102,6 +102,7 @@ int main(int argc, char** argv)
 
     // Create propagator
     std::string propChoice = "nbody"; // dummy propagator for loading data, not used for actual time integration
+    if (clustChoice == "darkdens") { propChoice = "ve"; }
     if (findSubclusters) { propChoice = "ve"; }
     auto propagator  = propagatorFactory<Domain, Dataset>(propChoice, avClean, output, rank, simInit->constants());
 

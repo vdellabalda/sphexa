@@ -16,6 +16,7 @@ std::unique_ptr<Clusterer<DomainType, ParticleDataType>>
 clustFactory(const std::string& choice, bool subCluster, std::ostream& output, size_t rank)
 {
     if (choice == "dark") { return ClustLib<DomainType, ParticleDataType>::makeDarkClust(output, rank, subCluster); }
+    if (choice == "darkdens") { return ClustLib<DomainType, ParticleDataType>::makeDarkClustDens(output, rank, subCluster); }
 
     throw std::runtime_error("Unknown clusterer choice: " + choice);
 }
