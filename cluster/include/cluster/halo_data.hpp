@@ -56,7 +56,7 @@ public:
      * if the field is active and is zero if the field is inactive.
      */
     FieldVector<IdType>             cId;
-    FieldVector<Tmass>              cMass;
+    FieldVector<double>             cMass;
     FieldVector<Tmass>              xCenter;
     FieldVector<Tmass>              yCenter;
     FieldVector<Tmass>              zCenter;

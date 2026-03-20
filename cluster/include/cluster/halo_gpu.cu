@@ -166,7 +166,7 @@ HOST_DEVICE_FUN void haloVelocity(
     atomicAdd(&haloVelocityZ[haloId], vz[idx] * m);
 };
 
-template<class Tc, class Tv, class Tm, class T>
+template<class Tc, class Tv, class Tm, class Tmc, class T>
 __global__ void haloPropertiesKernel(
     size_t first,
     size_t last,
@@ -184,7 +184,7 @@ __global__ void haloPropertiesKernel(
     Tv* haloVelocityX,
     Tv* haloVelocityY,
     Tv* haloVelocityZ,
-    Tm* haloMass
+    Tmc* haloMass
     )
 {   
     unsigned idx = first + blockIdx.x * blockDim.x + threadIdx.x;
@@ -198,26 +198,26 @@ __global__ void haloPropertiesKernel(
     atomicAddCustom(&haloCenterX[haloId], x[idx] * m);
     atomicAddCustom(&haloCenterY[haloId], y[idx] * m);
     atomicAddCustom(&haloCenterZ[haloId], z[idx] * m);
-    atomicAddCustom(&haloMass[haloId], m);
+    atomicAddCustom(&haloMass[haloId], double(m));
     atomicAddCustom(&haloVelocityX[haloId], vx[idx] * m);
     atomicAddCustom(&haloVelocityY[haloId], vy[idx] * m);
     atomicAddCustom(&haloVelocityZ[haloId], vz[idx] * m);
 };
 
-#define COMPUTE_HALO_PROPS(Tc, Tv, Tm, T)                                                                            \
+#define COMPUTE_HALO_PROPS(Tc, Tv, Tm, Tmc, T)                                                                            \
     template __global__ void haloPropertiesKernel(size_t first, size_t last, const Tc* x, const Tc* y, const Tc* z,  \
                                        const Tv* vx, const Tv* vy, const Tv* vz, const Tm* mass, const T* haloIds,   \
                                        Tm* haloCenterX, Tm* haloCenterY, Tm* haloCenterZ,                            \
-                                       Tv* haloVelocityX, Tv* haloVelocityY, Tv* haloVelocityZ, Tm* haloMass)
+                                       Tv* haloVelocityX, Tv* haloVelocityY, Tv* haloVelocityZ, Tmc* haloMass)
 
-COMPUTE_HALO_PROPS(double, double, double, uint32_t);
-COMPUTE_HALO_PROPS(double, double, float, uint32_t);
-COMPUTE_HALO_PROPS(double, float, double, uint32_t);
-COMPUTE_HALO_PROPS(float, double, double, uint32_t);
-COMPUTE_HALO_PROPS(double, float, float, uint32_t);
-COMPUTE_HALO_PROPS(float, double, float, uint32_t);
-COMPUTE_HALO_PROPS(float, float, double, uint32_t);
-COMPUTE_HALO_PROPS(float, float, float, uint32_t);
+COMPUTE_HALO_PROPS(double, double, double, double, uint32_t);
+COMPUTE_HALO_PROPS(double, double, float, double, uint32_t);
+COMPUTE_HALO_PROPS(double, float, double, double, uint32_t);
+COMPUTE_HALO_PROPS(float, double, double, double, uint32_t);
+COMPUTE_HALO_PROPS(double, float, float, double, uint32_t);
+COMPUTE_HALO_PROPS(float, double, float, double, uint32_t);
+COMPUTE_HALO_PROPS(float, float, double, double, uint32_t);
+COMPUTE_HALO_PROPS(float, float, float, double, uint32_t);
 
 template<class ParticleDataset, class ClusterDataset, class HaloDataset>
 void haloPropertiesGPU(
@@ -237,7 +237,7 @@ void haloPropertiesGPU(
     cstone::fillGpu(rawPtr(h.xVelocity), rawPtr(h.xVelocity)+numClusters, float(0.0));
     cstone::fillGpu(rawPtr(h.yVelocity), rawPtr(h.yVelocity)+numClusters, float(0.0));
     cstone::fillGpu(rawPtr(h.zVelocity), rawPtr(h.zVelocity)+numClusters, float(0.0));
-    cstone::fillGpu(rawPtr(h.cMass), rawPtr(h.cMass)+numClusters, float(0.0));
+    cstone::fillGpu(rawPtr(h.cMass), rawPtr(h.cMass)+numClusters, double(0.0));
 
     unsigned numThreads = 256;
     unsigned numBlocks = (last - first + numThreads - 1) / numThreads;
