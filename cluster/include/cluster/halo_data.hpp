@@ -64,9 +64,9 @@ public:
     FieldVector<HydroType>          yVelocity;
     FieldVector<HydroType>          zVelocity;
     FieldVector<uint32_t>           localSize;
-    FieldVector<uint64_t>           globalSize;
+    FieldVector<uint32_t>           globalSize;
     FieldVector<uint32_t>           localOffset;
-    FieldVector<uint64_t>           globalOffset;
+    FieldVector<uint32_t>           globalOffset;
     
     // Number of local clusters
     FieldVector<IdType>             numHalos;

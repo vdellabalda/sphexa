@@ -633,6 +633,9 @@ __host__ void computeCompactClusterIdGPU(
     // Assign global compact cluster Ids according to size, remove all clusters below threshold
     cstone::sortByKeyDescendGpu(localKeyCounts, localKeyCounts+numUniqueKeys, uniqueKeys);
     auto numClusters = cstone::upperBoundReverseGpu(localKeyCounts, localKeyCounts+numUniqueKeys, c.getClusterThreshold());
+    h.resize(numClusters);
+    cstone::sequenceGpu(rawPtr(h.cId), numClusters, ClusterIdType(1));
+    memcpyD2D(localKeyCounts, numClusters, rawPtr(h.globalSize));
     ClusterIdType* idMap = reinterpret_cast<ClusterIdType*>(rawPtr(c.localClusterIds));
     cstone::fillGpu(idMap, idMap+numUniqueKeys, ClusterIdType(0));
     cstone::sequenceGpu(idMap, numClusters, ClusterIdType(1));
@@ -660,6 +663,8 @@ __host__ void computeCompactClusterIdGPU(
     }
 
     c.numClustersGlobal = numClusters;
+
+
 }
 template void computeCompactClusterIdGPU(
     cluster::ClusterData<cstone::GpuTag>& c,
@@ -703,11 +708,8 @@ __host__ void prepareParticleClusterMapGPU(
     cstone::scatterGpu(uniqueClusterIds, h.numClustersLocal, localClusterCounts, rawPtr(h.localSize));
     cstone::exclusiveScanGpu(rawPtr(h.localSize), rawPtr(h.localSize)+numClusters, rawPtr(h.localOffset));
 
-    // Compute global counts and offset arrays
-    convertUint32ToUint64Gpu(rawPtr(h.localSize), rawPtr(h.globalOffset), numClusters);
-    mpiAllreduceGpuDirect(rawPtr(h.globalOffset), rawPtr(h.globalSize), numClusters, MPI_SUM, MPI_COMM_WORLD);
-    cstone::exclusiveScanGpu(rawPtr(h.globalSize), rawPtr(h.globalSize)+numClusters, rawPtr(h.globalOffset), uint64_t(0));
-    cstone::sequenceGpu(rawPtr(h.cId), numClusters, ClusterIdType(1));
+    // Compute global offset arrays
+    cstone::exclusiveScanGpu(rawPtr(h.globalSize), rawPtr(h.globalSize)+numClusters, rawPtr(h.globalOffset), uint32_t(0));
 }
 template void prepareParticleClusterMapGPU(
     cluster::ClusterData<cstone::GpuTag>& c,

@@ -139,8 +139,6 @@ public:
         auto& c = simData.clust;
         auto& h = simData.halo;
 
-        h.resize(c.numClustersGlobal);
-        h.numClustersGlobal = c.numClustersGlobal;
         prepareParticleClusterMap(c, h, domain);
         timer.step("prepareParticleClusterMap");
         pmReader.step();
@@ -193,9 +191,6 @@ public:
         auto& c = simData.clust;
         auto& h = simData.halo;
 
-        h.resize(c.numClustersGlobal);
-        h.numClustersGlobal = c.numClustersGlobal;
-        
         computeHaloPropertiesLocal(
             domain.startIndex(),
             domain.endIndex(),
