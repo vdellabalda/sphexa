@@ -633,6 +633,7 @@ __host__ void computeCompactClusterIdGPU(
     // Assign global compact cluster Ids according to size, remove all clusters below threshold
     cstone::sortByKeyDescendGpu(localKeyCounts, localKeyCounts+numUniqueKeys, uniqueKeys);
     auto numClusters = cstone::upperBoundReverseGpu(localKeyCounts, localKeyCounts+numUniqueKeys, c.getClusterThreshold());
+    h.numClustersGlobal = numClusters;
     h.resize(numClusters);
     cstone::sequenceGpu(rawPtr(h.cId), numClusters, ClusterIdType(1));
     memcpyD2D(localKeyCounts, numClusters, rawPtr(h.globalSize));
